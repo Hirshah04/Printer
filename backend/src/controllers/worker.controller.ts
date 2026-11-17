@@ -1,8 +1,19 @@
 import { Request, Response } from 'express';
 import { dbService, PrintJobStatus } from '../services/db.service.js';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
+import { sseService } from '../services/sse.service.js';
 
 let latestWorkerInfo: any = null;
+
+export function hasActiveWorker(): boolean {
+  if (!latestWorkerInfo || !latestWorkerInfo.lastHeartbeat) return false;
+  const timeSinceHeartbeat = Date.now() - new Date(latestWorkerInfo.lastHeartbeat).getTime();
+  return timeSinceHeartbeat < 45000;
+}
+
+export function getActiveWorkerInfo() {
+  return latestWorkerInfo;
+}
 
 export async function heartbeat(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
@@ -74,6 +85,7 @@ export async function updateJobStatus(req: AuthenticatedRequest, res: Response):
     }
 
     console.log(`[WorkerController] Job ${id} updated to ${status} - ${message || ''}`);
+    sseService.broadcastJobUpdate(job);
 
     res.json({ success: true, job });
   } catch (err: any) {
@@ -92,6 +104,8 @@ export async function updatePrinterStatus(req: AuthenticatedRequest, res: Respon
       stateReasons,
       supportedFormats,
     });
+
+    sseService.broadcastPrinterUpdate(printer);
 
     res.json({ success: true, printer });
   } catch (err: any) {

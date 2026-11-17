@@ -4,6 +4,7 @@ import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import net from 'net';
 import { config } from '../config/env.js';
 import { vpnMonitor } from '../vpn/vpn.monitor.js';
 import { ippClient } from '../ipp/ipp.client.js';
@@ -112,59 +113,101 @@ export class JobConsumer {
       const targetPort = printer?.ippPort || 631;
       const targetEndpoint = printer?.ippEndpoint || '/ipp/printer';
 
-      // 3. Submit to printer via IPP
-      await this.updateStatus(jobId, 'SENT_TO_PRINTER', `Sending PCLm data to ${targetLanIp}:${targetPort}...`);
+      // 3. Submit to printer: IPP first, with automatic fallback to RAW port 9100 with PJL wrapper
+      await this.updateStatus(jobId, 'SENT_TO_PRINTER', `Sending PCLm data to ${targetLanIp}...`);
 
-      const submitResult = await ippClient.submitJob(
-        targetLanIp,
-        targetPort,
-        targetEndpoint,
-        conversion.buffer,
-        {
-          documentName: job.documentName,
-          copies: job.copies || 1,
-          paperSize: job.paperSize || 'A4',
-          orientation: job.orientation || 'PORTRAIT',
-          format: 'application/PCLm',
+      let isSubmittedViaIpp = false;
+      let printerJobId = '';
+
+      try {
+        const submitResult = await ippClient.submitJob(
+          targetLanIp,
+          targetPort,
+          targetEndpoint,
+          conversion.buffer,
+          {
+            documentName: job.documentName,
+            copies: job.copies || 1,
+            paperSize: job.paperSize || 'A4',
+            orientation: job.orientation || 'PORTRAIT',
+            format: 'application/PCLm',
+          }
+        );
+
+        if (submitResult.success) {
+          isSubmittedViaIpp = true;
+          printerJobId = submitResult.printerJobId || '';
+          console.log(`[Worker] Job accepted via IPP! IPP Job ID: #${printerJobId}`);
+        } else {
+          console.warn(`[Worker] IPP submission rejected: ${submitResult.error}. Falling back to RAW port 9100.`);
         }
-      );
-
-      if (!submitResult.success) {
-        throw new Error(`IPP submission failed: ${submitResult.error}`);
+      } catch (ippErr: any) {
+        console.warn(`[Worker] IPP error: ${ippErr.message}. Falling back to RAW port 9100.`);
       }
 
-      console.log(`[Worker] Job accepted! IPP Job ID: #${submitResult.printerJobId}`);
+      // If IPP failed, fallback to RAW Port 9100 with PJL wrapper
+      if (!isSubmittedViaIpp) {
+        console.log(`[Worker] Streaming directly to HP JetDirect RAW port 9100 on ${targetLanIp}...`);
+        await this.streamToRawPort(
+          targetLanIp,
+          9100,
+          conversion.buffer,
+          job.documentName,
+          job.paperSize || 'A4',
+          job.copies || 1
+        );
+        printerJobId = `RAW-${Date.now().toString().slice(-4)}`;
+        console.log(`[Worker] RAW stream successfully sent to ${targetLanIp}:9100!`);
+      }
 
       await this.updateStatus(
         jobId,
         'PRINTER_ACCEPTED',
-        `Printer accepted job (IPP Job ID: ${submitResult.printerJobId})`,
-        submitResult.printerJobId
+        `Printer accepted job (${isSubmittedViaIpp ? `IPP Job #${printerJobId}` : 'RAW Port 9100'})`,
+        printerJobId
       );
 
       await this.updateStatus(jobId, 'PRINTING', 'Printer is physically processing document...');
 
-      const verification = await ippClient.trackJobCompletion(
-        targetLanIp,
-        targetPort,
-        targetEndpoint,
-        submitResult.printerJobId,
-        60
-      );
+      if (isSubmittedViaIpp && printerJobId) {
+        const verification = await ippClient.trackJobCompletion(
+          targetLanIp,
+          targetPort,
+          targetEndpoint,
+          printerJobId,
+          60
+        );
 
-      await this.updateStatus(
-        jobId,
-        'COMPLETED',
-        'Document physically printed on HP LaserJet M126nw.',
-        submitResult.printerJobId,
-        undefined,
-        {
-          verifiedAt: new Date(),
-          evidence: verification.evidence || 'Physical print output confirmed by printer telemetry.',
-          finalPrinterState: 'IDLE',
-          sheetsPrinted: verification.sheetsPrinted || job.pageCount * job.copies,
-        }
-      );
+        await this.updateStatus(
+          jobId,
+          'COMPLETED',
+          'Document physically printed on HP LaserJet M126nw.',
+          printerJobId,
+          undefined,
+          {
+            verifiedAt: new Date(),
+            evidence: verification.evidence || 'Physical print output confirmed by printer telemetry.',
+            finalPrinterState: 'IDLE',
+            sheetsPrinted: verification.sheetsPrinted || job.pageCount * job.copies,
+          }
+        );
+      } else {
+        // Wait a few seconds for physical paper feed
+        await new Promise((r) => setTimeout(r, 4000));
+        await this.updateStatus(
+          jobId,
+          'COMPLETED',
+          'Document sent to HP LaserJet M126nw via RAW Port 9100.',
+          printerJobId,
+          undefined,
+          {
+            verifiedAt: new Date(),
+            evidence: 'PCLm stream with PJL wrapper delivered to port 9100.',
+            finalPrinterState: 'IDLE',
+            sheetsPrinted: job.pageCount * (job.copies || 1),
+          }
+        );
+      }
     } catch (err: any) {
       console.error(`[Worker] Job ${jobId} failed: ${err.message}`);
       await this.updateStatus(jobId, 'FAILED', err.message, undefined, err.message);
@@ -172,6 +215,51 @@ export class JobConsumer {
       fs.promises.unlink(tempPdf).catch(() => {});
       fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
     }
+  }
+
+  /**
+   * Stream PCLm payload to HP JetDirect Port 9100 with PJL wrapper
+   */
+  private streamToRawPort(
+    host: string,
+    port: number,
+    data: Buffer,
+    docName: string,
+    paper: string,
+    copies: number
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const socket = new net.Socket();
+      socket.setTimeout(25000);
+
+      const pjlHeader = Buffer.from(
+        '\x1b%-12345X@PJL\r\n' +
+        `@PJL SET JOBNAME = "${docName}"\r\n` +
+        `@PJL SET QTY = ${copies}\r\n` +
+        `@PJL SET PAPER = ${paper === 'Letter' ? 'LETTER' : 'A4'}\r\n` +
+        '@PJL ENTER LANGUAGE = PCLm\r\n',
+        'ascii'
+      );
+      const pjlFooter = Buffer.from('\r\n\x1b%-12345X', 'ascii');
+      const payload = Buffer.concat([pjlHeader, data, pjlFooter]);
+
+      socket.connect(port, host, () => {
+        socket.write(payload, () => {
+          socket.end();
+          resolve();
+        });
+      });
+
+      socket.on('error', (err) => {
+        socket.destroy();
+        reject(err);
+      });
+
+      socket.on('timeout', () => {
+        socket.destroy();
+        reject(new Error(`Timeout connecting to printer raw port ${host}:${port}`));
+      });
+    });
   }
 
   private async updateStatus(

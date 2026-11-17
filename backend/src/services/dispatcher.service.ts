@@ -127,10 +127,11 @@ export class DispatcherService {
 
       // If IPP failed, fallback to RAW Port 9100 with PJL wrapper
       if (!isSubmittedViaIpp) {
-        console.log(`[Dispatcher] Streaming directly to HP JetDirect RAW port 9100 on ${printerIp}...`);
-        await this.streamToRawPort(printerIp, 9100, pclmBuffer, job.documentName, job.paperSize || 'A4', job.copies || 1);
+        const rawPort = config.printer.rawPort || 9100;
+        console.log(`[Dispatcher] Streaming directly to HP JetDirect RAW port ${rawPort} on ${printerIp}...`);
+        await this.streamToRawPort(printerIp, rawPort, pclmBuffer, job.documentName, job.paperSize || 'A4', job.copies || 1);
         printerJobId = `RAW-${Date.now().toString().slice(-4)}`;
-        console.log(`[Dispatcher] RAW stream successfully sent to ${printerIp}:9100!`);
+        console.log(`[Dispatcher] RAW stream successfully sent to ${printerIp}:${rawPort}!`);
       }
 
       const ackTime = new Date().toISOString();
@@ -164,13 +165,35 @@ export class DispatcherService {
       }
     } catch (err: any) {
       console.error(`[Dispatcher] Print job ${jobId} failed:`, err.message);
+      const isPrivateIp = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|127\.)/.test(printerIp);
+      const isNetworkTimeout = err.message && (
+        err.message.includes('Timeout') ||
+        err.message.includes('ECONNREFUSED') ||
+        err.message.includes('EHOSTUNREACH') ||
+        err.message.includes('ETIMEDOUT')
+      );
+
+      let userFriendlyMessage = err.message;
+      if (isPrivateIp && isNetworkTimeout) {
+        userFriendlyMessage = `Cannot reach private IP ${printerIp} directly from cloud server. Please start the local print worker on your home Wi-Fi or configure router port forwarding.`;
+
+        // Keep job in QUEUED status so the local print worker can pick it up immediately!
+        const jobQueued = await dbService.updateJob(jobId, {
+          status: 'QUEUED',
+          message: userFriendlyMessage,
+          errorMessage: userFriendlyMessage,
+        });
+        if (jobQueued) sseService.broadcastJobUpdate(jobQueued);
+        return;
+      }
+
       const failTime = new Date().toISOString();
       const jobFailed = await dbService.updateJob(jobId, {
         status: 'FAILED',
         failedAt: failTime,
-        message: err.message,
-        errorMessage: err.message,
-        printerError: err.message,
+        message: userFriendlyMessage,
+        errorMessage: userFriendlyMessage,
+        printerError: userFriendlyMessage,
       });
       if (jobFailed) sseService.broadcastJobUpdate(jobFailed);
     } finally {
@@ -193,7 +216,7 @@ export class DispatcherService {
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       const socket = new net.Socket();
-      socket.setTimeout(25000);
+      socket.setTimeout(12000);
 
       const pjlHeader = Buffer.from(
         '\x1b%-12345X@PJL\r\n' +

@@ -157,9 +157,9 @@ export class PrinterMonitorService {
       tonerStatus = 'LOW';
       if (currentStatus === 'ONLINE') currentStatus = 'TONER_LOW';
     } else if (reasonsStr.includes('usedconsumable') || reasonsStr.includes('nonhp')) {
-      // Non-HP / Used cartridge notice
-      if (currentStatus === 'ONLINE') currentStatus = 'ERROR';
-      lastError = lastError || 'Used or non-original toner cartridge detected. Acknowledge on printer panel.';
+      // Non-HP / Used cartridge notice: On HP LaserJet M126nw, this is informational only and does NOT stop printing.
+      // Do not set status to ERROR. Keep as OK/ONLINE.
+      tonerStatus = 'OK';
     }
 
     if (reasonsStr.includes('door-open') || reasonsStr.includes('cover-open')) {

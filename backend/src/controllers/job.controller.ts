@@ -4,6 +4,7 @@ import { storageService } from '../services/storage.service.js';
 import { pdfService } from '../services/pdf.service.js';
 import { dispatcherService } from '../services/dispatcher.service.js';
 import { config } from '../config/env.js';
+import { hasActiveWorker, getActiveWorkerInfo } from './worker.controller.js';
 
 export async function createJob(req: Request, res: Response): Promise<void> {
   try {
@@ -61,8 +62,15 @@ export async function createJob(req: Request, res: Response): Promise<void> {
 
     console.log(`[JobController] Job created: ${job._id} - ${job.documentName} (${job.pageCount} p, ${job.copies}x)`);
 
-    // IMMEDIATELY trigger the dispatch pipeline so the document prints right away
-    dispatcherService.dispatch(job._id);
+    // If an active local print worker is connected to the backend, let it claim and print the job over the local Wi-Fi.
+    // Otherwise, attempt direct dispatch from the server.
+    if (hasActiveWorker()) {
+      const worker = getActiveWorkerInfo();
+      console.log(`[JobController] Active print worker detected [${worker?.workerId}]. Job ${job._id} queued for worker processing.`);
+    } else {
+      console.log(`[JobController] No active print worker detected. Attempting direct dispatch to ${config.printer.ip}...`);
+      dispatcherService.dispatch(job._id);
+    }
 
     res.status(201).json({
       success: true,

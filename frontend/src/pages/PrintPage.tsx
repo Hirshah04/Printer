@@ -525,9 +525,6 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
               <div className="text-xs font-mono text-rose-200">
                 {activeJob.printerError || activeJob.errorMessage || 'Check printer connection'}
               </div>
-              <div className="text-[11px] text-rose-300/80 mt-2">
-                Tip: If the printer LCD shows "Used Black Cartridge in use", press the <span className="font-bold text-white">[OK]</span> button on the printer control panel to acknowledge and continue printing.
-              </div>
             </div>
           )}
 

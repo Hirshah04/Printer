@@ -13,6 +13,7 @@ export const config = {
   printer: {
     ip: process.env.PRINTER_IP || '192.168.1.37',
     port: parseInt(process.env.PRINTER_PORT || '631', 10),
+    rawPort: parseInt(process.env.PRINTER_RAW_PORT || '9100', 10),
     endpoint: process.env.PRINTER_ENDPOINT || '/ipp/printer',
     name: process.env.PRINTER_NAME || 'HP LaserJet Pro MFP M126nw',
     brand: 'HP',
