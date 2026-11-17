@@ -22,7 +22,9 @@ class RealtimeClient {
     }
 
     // Connect to SSE stream (handled via Vite proxy in dev, direct /api in prod)
-    this.eventSource = new EventSource('/api/printer/stream');
+    const baseUrl = import.meta.env.VITE_API_URL || '';
+    const streamUrl = `${baseUrl}/api/printer/stream`;
+    this.eventSource = new EventSource(streamUrl);
 
     this.eventSource.onopen = () => {
       this.isConnected = true;
