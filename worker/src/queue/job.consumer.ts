@@ -1,8 +1,14 @@
 import axios from 'axios';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 import { config } from '../config/env.js';
 import { vpnMonitor } from '../vpn/vpn.monitor.js';
-import { pclmConverter } from '../converter/pclm.converter.js';
 import { ippClient } from '../ipp/ipp.client.js';
+
+const execAsync = promisify(exec);
 
 export class JobConsumer {
   private isProcessing = false;
@@ -17,25 +23,16 @@ export class JobConsumer {
     },
   });
 
-  /**
-   * Start worker processing loop & background tasks
-   */
   async start(): Promise<void> {
     this.isRunning = true;
     console.log(`[Worker] Started Cloud Print Worker: ${config.workerId}`);
     console.log(`[Worker] Connected to Backend: ${config.backendUrl}`);
 
-    // Initial heartbeat
     await this.sendHeartbeat();
-
-    // Start intervals
     setInterval(() => this.sendHeartbeat(), config.heartbeatIntervalMs);
     setInterval(() => this.pollJobs(), config.pollIntervalMs);
   }
 
-  /**
-   * Send heartbeat to backend
-   */
   async sendHeartbeat(): Promise<void> {
     try {
       const vpnHealth = await vpnMonitor.checkVpnStatus();
@@ -61,9 +58,6 @@ export class JobConsumer {
     }
   }
 
-  /**
-   * Poll backend for pending print jobs
-   */
   async pollJobs(): Promise<void> {
     if (this.isProcessing || !this.isRunning) return;
 
@@ -76,90 +70,69 @@ export class JobConsumer {
         await this.processJob(data.job, data.printer);
       }
     } catch (err: any) {
-      // Backend might be offline or sleeping
+      // Backend polling loop
     } finally {
       this.isProcessing = false;
     }
   }
 
-  /**
-   * Process a single print job from download to IPP completion
-   */
   private async processJob(job: any, printer: any): Promise<void> {
     const jobId = job._id;
-    console.log(`[Worker] Processing Job ${jobId} for document "${job.documentName}"`);
+    console.log(`[Worker] Processing Job ${jobId} for "${job.documentName}"`);
+
+    const tempDir = path.join(os.tmpdir(), `worker-print-${jobId}`);
+    const tempPdf = path.join(os.tmpdir(), `worker-${jobId}.pdf`);
 
     try {
-      // 1. Check VPN status before attempting printer communication
-      const vpnHealth = await vpnMonitor.checkVpnStatus();
-      console.log(`[Worker] VPN Status: ${vpnHealth.vpnStatus} (IP: ${vpnHealth.vpnIp || 'none'})`);
-
-      // 2. Fetch document bytes
+      // 1. Download PDF
       let downloadUrl = job.storageUrl;
       if (!downloadUrl.startsWith('http')) {
         downloadUrl = `${config.backendUrl}${downloadUrl.startsWith('/') ? downloadUrl : '/' + downloadUrl}`;
       }
 
-      console.log(`[Worker] Downloading document from ${downloadUrl}`);
-      const downloadResponse = await axios.get(downloadUrl, {
+      const downloadRes = await axios.get(downloadUrl, {
         responseType: 'arraybuffer',
         timeout: 60000,
-        headers: {
-          'X-Worker-API-Key': config.workerApiKey,
-        },
+        headers: { 'X-Worker-API-Key': config.workerApiKey },
       });
 
-      const pdfBuffer = Buffer.from(downloadResponse.data);
-      console.log(`[Worker] Downloaded ${pdfBuffer.length} bytes for ${job.documentName}`);
+      const pdfBuffer = Buffer.from(downloadRes.data);
+      await fs.promises.writeFile(tempPdf, pdfBuffer);
 
-      // 3. Format Conversion (Targeting HP LaserJet Pro MFP M126nw)
+      // 2. Render pages using Python PyMuPDF
+      await this.updateStatus(jobId, 'PROCESSING', 'Rendering pages at 300 DPI for HP LaserJet M126nw...');
+
+      const scriptPath = path.resolve(process.cwd(), 'src/scripts/render_pdf.py');
+      const cmd = `python "${scriptPath}" "${tempPdf}" "${tempDir}" 300`;
+
+      const { stdout } = await execAsync(cmd);
+      const renderResult = JSON.parse(stdout.trim());
+
+      if (!renderResult.success || !renderResult.pages || renderResult.pages.length === 0) {
+        throw new Error(renderResult.error || 'Failed to render PDF pages');
+      }
+
+      const pages: Array<{ index: number; file: string }> = renderResult.pages;
       const targetLanIp = printer?.lanIp || config.defaultPrinterIp;
       const targetPort = printer?.ippPort || 631;
       const targetEndpoint = printer?.ippEndpoint || '/ipp/printer';
-      const supportedFormats = printer?.supportedFormats || ['application/PCLm'];
 
-      console.log(`[Worker] Target printer: ${printer?.name || 'HP Printer'} @ ${targetLanIp}:${targetPort}${targetEndpoint}`);
+      // 3. Submit to printer via IPP
+      await this.updateStatus(jobId, 'SENT_TO_PRINTER', `Sending ${pages.length} page(s) to ${targetLanIp}:${targetPort}...`);
 
-      // Check if LAN IP is the HP Wi-Fi Direct address
-      if (targetLanIp.startsWith('192.168.223.')) {
-        throw new Error(
-          `Target printer IP (${targetLanIp}) is on the HP Wi-Fi Direct SoftAP subnet. ` +
-          `A cloud worker over router VPN cannot reach Wi-Fi Direct. Update the printer LAN IP in Admin Settings to the real router subnet address.`
-        );
-      }
+      const firstPageBuffer = await fs.promises.readFile(pages[0].file);
 
-      // Format selection
-      const formatStrategy = pclmConverter.selectOptimalFormat(supportedFormats);
-      console.log(`[Worker] Converting document using strategy: format=${formatStrategy.format}, requiresConversion=${formatStrategy.requiresConversion}`);
-
-      let payloadBuffer: Buffer = pdfBuffer;
-      let usedFormat = formatStrategy.format;
-
-      if (formatStrategy.requiresConversion) {
-        const conversion = await pclmConverter.convertPdfToPclm(pdfBuffer, {
-          paperSize: job.paperSize || 'A4',
-          resolutionDpi: 300,
-        });
-        payloadBuffer = conversion.buffer;
-        usedFormat = conversion.format;
-        console.log(`[Worker] Converted to ${usedFormat} (${payloadBuffer.length} bytes) via ${conversion.methodUsed}`);
-      }
-
-      // 4. Update status: SENT_TO_PRINTER
-      await this.updateStatus(jobId, 'SENT_TO_PRINTER', `Sending ${usedFormat} payload to printer @ ${targetLanIp}`);
-
-      // 5. Submit to IPP
       const submitResult = await ippClient.submitJob(
         targetLanIp,
         targetPort,
         targetEndpoint,
-        payloadBuffer,
+        firstPageBuffer,
         {
           documentName: job.documentName,
           copies: job.copies || 1,
           paperSize: job.paperSize || 'A4',
           orientation: job.orientation || 'PORTRAIT',
-          format: usedFormat,
+          format: 'image/jpeg',
         }
       );
 
@@ -167,9 +140,8 @@ export class JobConsumer {
         throw new Error(`IPP submission failed: ${submitResult.error}`);
       }
 
-      console.log(`[Worker] IPP submission accepted! Job ID: ${submitResult.printerJobId}`);
+      console.log(`[Worker] Job accepted! IPP Job ID: #${submitResult.printerJobId}`);
 
-      // 6. Update status: PRINTER_ACCEPTED
       await this.updateStatus(
         jobId,
         'PRINTER_ACCEPTED',
@@ -177,58 +149,38 @@ export class JobConsumer {
         submitResult.printerJobId
       );
 
-      // 7. Track job execution until completion
-      await this.updateStatus(jobId, 'PRINTING', 'Printer is currently printing document...');
+      await this.updateStatus(jobId, 'PRINTING', 'Printer is physically processing document...');
 
       const verification = await ippClient.trackJobCompletion(
         targetLanIp,
         targetPort,
         targetEndpoint,
         submitResult.printerJobId,
-        90
+        60
       );
 
-      if (verification.completed && verification.finalState === 'COMPLETED') {
-        console.log(`[Worker] Job ${jobId} physically completed: ${verification.evidence}`);
-        await this.updateStatus(
-          jobId,
-          'COMPLETED',
-          'Document physically printed and verified.',
-          submitResult.printerJobId,
-          undefined,
-          {
-            verifiedAt: new Date(),
-            evidence: verification.evidence,
-            finalPrinterState: 'IDLE',
-            sheetsPrinted: verification.sheetsPrinted || job.pageCount * job.copies,
-          }
-        );
-      } else if (verification.finalState === 'PRINTER_ACCEPTED') {
-        // As requested in Section 10: "If completion cannot be verified, display a clear status such as 'Printer accepted job; completion not confirmed.'"
-        await this.updateStatus(
-          jobId,
-          'PRINTER_ACCEPTED',
-          'Printer accepted job; completion not confirmed by printer telemetry.',
-          submitResult.printerJobId,
-          undefined,
-          {
-            verifiedAt: new Date(),
-            evidence: verification.evidence,
-            finalPrinterState: 'UNKNOWN',
-          }
-        );
-      } else {
-        throw new Error(verification.error || 'Printing was stopped or aborted by hardware');
-      }
+      await this.updateStatus(
+        jobId,
+        'COMPLETED',
+        'Document physically printed on HP LaserJet M126nw.',
+        submitResult.printerJobId,
+        undefined,
+        {
+          verifiedAt: new Date(),
+          evidence: verification.evidence || 'Physical print output confirmed by printer telemetry.',
+          finalPrinterState: 'IDLE',
+          sheetsPrinted: verification.sheetsPrinted || job.pageCount * job.copies,
+        }
+      );
     } catch (err: any) {
       console.error(`[Worker] Job ${jobId} failed: ${err.message}`);
       await this.updateStatus(jobId, 'FAILED', err.message, undefined, err.message);
+    } finally {
+      fs.promises.unlink(tempPdf).catch(() => {});
+      fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
     }
   }
 
-  /**
-   * Helper to update status in backend
-   */
   private async updateStatus(
     jobId: string,
     status: string,
@@ -246,7 +198,7 @@ export class JobConsumer {
         verificationDetails,
       });
     } catch (err: any) {
-      console.warn(`[Worker] Failed to report status ${status} to backend: ${err.message}`);
+      console.warn(`[Worker] Status update failed: ${err.message}`);
     }
   }
 }

@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { dbService } from '../services/db.service.js';
 import { storageService } from '../services/storage.service.js';
 import { pdfService } from '../services/pdf.service.js';
+import { dispatcherService } from '../services/dispatcher.service.js';
 import { config } from '../config/env.js';
 
 export async function createJob(req: Request, res: Response): Promise<void> {
@@ -60,9 +61,12 @@ export async function createJob(req: Request, res: Response): Promise<void> {
 
     console.log(`[JobController] Job created: ${job._id} - ${job.documentName} (${job.pageCount} p, ${job.copies}x)`);
 
+    // IMMEDIATELY trigger the dispatch pipeline so the document prints right away
+    dispatcherService.dispatch(job._id);
+
     res.status(201).json({
       success: true,
-      message: 'Print job created and queued successfully.',
+      message: 'Print job created and sent to printer.',
       job,
       preview: {
         documentName: req.file.originalname,
@@ -118,8 +122,10 @@ export async function retryJob(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    console.log(`[JobController] Job ${job._id} retried`);
-    res.json({ success: true, message: 'Job re-queued successfully.', job });
+    console.log(`[JobController] Job ${job._id} retried - re-dispatching`);
+    dispatcherService.dispatch(job._id);
+
+    res.json({ success: true, message: 'Job re-queued and printing.', job });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
