@@ -105,6 +105,10 @@ class RealtimeClient {
     listener(this.isConnected);
     return () => this.connectionListeners.delete(listener);
   }
+
+  onStatus(listener: StatusListener): () => void {
+    return this.onConnectionStatus(listener);
+  }
 }
 
 export const realtimeClient = new RealtimeClient();

@@ -111,7 +111,7 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
       });
     });
 
-    const unsubStatus = realtimeClient.onStatus((connected) => {
+    const unsubStatus = realtimeClient.onConnectionStatus((connected: boolean) => {
       addLog(
         connected ? 'success' : 'warn',
         'NET',
