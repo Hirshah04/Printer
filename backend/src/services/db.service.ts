@@ -14,6 +14,17 @@ export type PrintJobStatus =
   | 'FAILED'
   | 'CANCELLED';
 
+export type PrinterOperationalStatus =
+  | 'ONLINE'
+  | 'BUSY'
+  | 'PRINTING'
+  | 'IDLE'
+  | 'PAPER_OUT'
+  | 'TONER_LOW'
+  | 'ERROR'
+  | 'OFFLINE'
+  | 'UNKNOWN';
+
 export interface PrintJob {
   _id: string;
   documentName: string;
@@ -27,8 +38,18 @@ export interface PrintJob {
   status: PrintJobStatus;
   statusHistory: Array<{ status: PrintJobStatus; timestamp: string; message?: string }>;
   printerJobId?: string;
+  printerIPPJobId?: string | number;
+  printerJobState?: string;
+  lastAcknowledgementAt?: string;
+  printerError?: string;
   printerStatusMessage?: string;
   errorMessage?: string;
+  submittedAt?: string;
+  startedAt?: string;
+  completedAt?: string;
+  failedAt?: string;
+  completionVerified: boolean;
+  sheetsPrinted?: number;
   retryCount: number;
   maxRetries: number;
   verificationDetails?: {
@@ -49,10 +70,18 @@ export interface PrinterState {
   ippPort: number;
   ippEndpoint: string;
   supportedFormats: string[];
+  currentStatus: PrinterOperationalStatus;
   connectionStatus: 'ONLINE' | 'OFFLINE' | 'UNREACHABLE' | 'BUSY' | 'ERROR';
   paperStatus: 'OK' | 'LOW' | 'EMPTY' | 'OUT' | 'UNKNOWN';
   tonerStatus: 'OK' | 'LOW' | 'EMPTY' | 'OUT' | 'UNKNOWN';
   stateReasons: string[];
+  queuedJobCount: number;
+  lastAcknowledgementAt?: string;
+  lastSuccessfulAcknowledgementAt?: string;
+  nextCheckAt?: string;
+  consecutiveFailureCount: number;
+  lastError?: string;
+  monitoringEnabled: boolean;
   lastSeenAt?: string;
 }
 
@@ -66,10 +95,14 @@ class JsonDbService {
     ippPort: config.printer.port,
     ippEndpoint: config.printer.endpoint,
     supportedFormats: config.printer.supportedFormats,
+    currentStatus: 'UNKNOWN',
     connectionStatus: 'OFFLINE',
     paperStatus: 'UNKNOWN',
     tonerStatus: 'UNKNOWN',
     stateReasons: [],
+    queuedJobCount: 0,
+    consecutiveFailureCount: 0,
+    monitoringEnabled: true,
   };
 
   constructor() {
@@ -114,11 +147,15 @@ class JsonDbService {
 
   // --- Print Jobs API ---
 
-  async createJob(data: Omit<PrintJob, '_id' | 'createdAt' | 'updatedAt' | 'retryCount' | 'maxRetries'>): Promise<PrintJob> {
+  async createJob(
+    data: Omit<PrintJob, '_id' | 'createdAt' | 'updatedAt' | 'retryCount' | 'maxRetries' | 'completionVerified'>
+  ): Promise<PrintJob> {
     const now = new Date().toISOString();
     const newJob: PrintJob = {
       ...data,
       _id: `job-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      completionVerified: false,
+      submittedAt: now,
       retryCount: 0,
       maxRetries: 3,
       createdAt: now,
@@ -143,6 +180,12 @@ class JsonDbService {
     return result;
   }
 
+  async getActiveJobs(): Promise<PrintJob[]> {
+    return this.jobs.filter((j) =>
+      ['QUEUED', 'PROCESSING', 'SENT_TO_PRINTER', 'PRINTER_ACCEPTED', 'PRINTING'].includes(j.status)
+    );
+  }
+
   async getJobById(id: string): Promise<PrintJob | null> {
     return this.jobs.find((j) => j._id === id) || null;
   }
@@ -160,6 +203,7 @@ class JsonDbService {
 
     const now = new Date().toISOString();
     job.status = 'PROCESSING';
+    job.startedAt = now;
     job.updatedAt = now;
     job.statusHistory.push({
       status: 'PROCESSING',
@@ -173,14 +217,7 @@ class JsonDbService {
 
   async updateJob(
     id: string,
-    updates: {
-      status?: PrintJobStatus;
-      message?: string;
-      printerJobId?: string;
-      printerStatusMessage?: string;
-      errorMessage?: string;
-      verificationDetails?: any;
-    }
+    updates: Partial<PrintJob> & { message?: string }
   ): Promise<PrintJob | null> {
     const job = this.jobs.find((j) => j._id === id);
     if (!job) return null;
@@ -188,19 +225,35 @@ class JsonDbService {
     const now = new Date().toISOString();
     job.updatedAt = now;
 
-    if (updates.status) {
+    if (updates.status && updates.status !== job.status) {
       job.status = updates.status;
       job.statusHistory.push({
         status: updates.status,
         timestamp: now,
         message: updates.message || `Status updated to ${updates.status}`,
       });
+
+      if (updates.status === 'PRINTING' && !job.startedAt) {
+        job.startedAt = now;
+      }
+      if (updates.status === 'COMPLETED') {
+        job.completedAt = now;
+      }
+      if (updates.status === 'FAILED') {
+        job.failedAt = now;
+      }
     }
 
-    if (updates.printerJobId) job.printerJobId = updates.printerJobId;
-    if (updates.printerStatusMessage) job.printerStatusMessage = updates.printerStatusMessage;
-    if (updates.errorMessage) job.errorMessage = updates.errorMessage;
-    if (updates.verificationDetails) job.verificationDetails = updates.verificationDetails;
+    if (updates.printerJobId !== undefined) job.printerJobId = updates.printerJobId;
+    if (updates.printerIPPJobId !== undefined) job.printerIPPJobId = updates.printerIPPJobId;
+    if (updates.printerJobState !== undefined) job.printerJobState = updates.printerJobState;
+    if (updates.lastAcknowledgementAt !== undefined) job.lastAcknowledgementAt = updates.lastAcknowledgementAt;
+    if (updates.printerError !== undefined) job.printerError = updates.printerError;
+    if (updates.printerStatusMessage !== undefined) job.printerStatusMessage = updates.printerStatusMessage;
+    if (updates.errorMessage !== undefined) job.errorMessage = updates.errorMessage;
+    if (updates.completionVerified !== undefined) job.completionVerified = updates.completionVerified;
+    if (updates.sheetsPrinted !== undefined) job.sheetsPrinted = updates.sheetsPrinted;
+    if (updates.verificationDetails !== undefined) job.verificationDetails = updates.verificationDetails;
 
     this.saveToDisk();
     return job;

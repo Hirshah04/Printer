@@ -1,3 +1,14 @@
+export type PrinterOperationalStatus =
+  | 'ONLINE'
+  | 'BUSY'
+  | 'PRINTING'
+  | 'IDLE'
+  | 'PAPER_OUT'
+  | 'TONER_LOW'
+  | 'ERROR'
+  | 'OFFLINE'
+  | 'UNKNOWN';
+
 export interface Printer {
   name: string;
   brand: string;
@@ -6,10 +17,18 @@ export interface Printer {
   ippPort: number;
   ippEndpoint: string;
   supportedFormats: string[];
+  currentStatus: PrinterOperationalStatus;
   connectionStatus: 'ONLINE' | 'OFFLINE' | 'UNREACHABLE' | 'BUSY' | 'ERROR';
   paperStatus: 'OK' | 'LOW' | 'EMPTY' | 'OUT' | 'UNKNOWN';
   tonerStatus: 'OK' | 'LOW' | 'EMPTY' | 'OUT' | 'UNKNOWN';
   stateReasons: string[];
+  queuedJobCount?: number;
+  lastAcknowledgementAt?: string;
+  lastSuccessfulAcknowledgementAt?: string;
+  nextCheckAt?: string;
+  consecutiveFailureCount?: number;
+  lastError?: string;
+  monitoringEnabled?: boolean;
   lastSeenAt?: string;
 }
 
@@ -44,8 +63,18 @@ export interface PrintJob {
   status: PrintJobStatus;
   statusHistory: StatusHistoryItem[];
   printerJobId?: string;
+  printerIPPJobId?: string | number;
+  printerJobState?: string;
+  lastAcknowledgementAt?: string;
+  printerError?: string;
   printerStatusMessage?: string;
   errorMessage?: string;
+  submittedAt?: string;
+  startedAt?: string;
+  completedAt?: string;
+  failedAt?: string;
+  completionVerified?: boolean;
+  sheetsPrinted?: number;
   retryCount: number;
   maxRetries: number;
   verificationDetails?: {

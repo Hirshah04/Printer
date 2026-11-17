@@ -1,11 +1,37 @@
 import { Request, Response } from 'express';
 import { dbService } from '../services/db.service.js';
 import { ippService } from '../services/ipp.service.js';
-import { config } from '../config/env.js';
+import { sseService } from '../services/sse.service.js';
+import { printerMonitorService } from '../services/printer-monitor.service.js';
 
 export async function getPrinter(req: Request, res: Response): Promise<void> {
   try {
     const printer = dbService.getPrinter();
+    res.json({ success: true, printer });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+/**
+ * Server-Sent Events stream providing real-time telemetry updates
+ */
+export async function streamRealtimeTelemetry(req: Request, res: Response): Promise<void> {
+  try {
+    await sseService.registerClient(res);
+  } catch (err: any) {
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+}
+
+/**
+ * Force an immediate telemetry cycle
+ */
+export async function checkPrinterNow(req: Request, res: Response): Promise<void> {
+  try {
+    const printer = await printerMonitorService.checkNow();
     res.json({ success: true, printer });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
@@ -19,13 +45,17 @@ export async function testConnection(req: Request, res: Response): Promise<void>
 
     if (result.reachable) {
       const state = result.state === 'STOPPED' ? 'ERROR' : result.state === 'PROCESSING' ? 'BUSY' : 'ONLINE';
-      dbService.updatePrinterState({
+      const updated = dbService.updatePrinterState({
         connectionStatus: state,
+        currentStatus: result.state === 'PROCESSING' ? 'PRINTING' : 'ONLINE',
         paperStatus: result.paperStatus || 'OK',
         tonerStatus: result.tonerStatus || 'OK',
         stateReasons: result.stateReasons || [],
         supportedFormats: result.supportedFormats || printer.supportedFormats,
+        consecutiveFailureCount: 0,
+        lastSuccessfulAcknowledgementAt: new Date().toISOString(),
       });
+      sseService.broadcastPrinterUpdate(updated);
 
       res.json({
         success: true,
@@ -38,7 +68,12 @@ export async function testConnection(req: Request, res: Response): Promise<void>
         rawAttributes: result.rawAttributes,
       });
     } else {
-      dbService.updatePrinterState({ connectionStatus: 'UNREACHABLE' });
+      const updated = dbService.updatePrinterState({
+        connectionStatus: 'UNREACHABLE',
+        currentStatus: 'OFFLINE',
+        lastError: result.error || 'Printer unreachable over IPP',
+      });
+      sseService.broadcastPrinterUpdate(updated);
 
       res.json({
         success: false,
@@ -46,7 +81,7 @@ export async function testConnection(req: Request, res: Response): Promise<void>
         error: result.error || 'Printer unreachable over IPP',
         diagnostic: {
           lanIp: printer.lanIp,
-          hint: `Ensure Cloud Print Worker VPN is connected and can reach router subnet IP ${printer.lanIp}.`,
+          hint: `Ensure printer is powered on and reachable on router subnet at ${printer.lanIp}:631.`,
         },
       });
     }

@@ -6,6 +6,7 @@ import os from 'os';
 import ipp from 'ipp';
 import { dbService } from './db.service.js';
 import { storageService } from './storage.service.js';
+import { sseService } from './sse.service.js';
 import { config } from '../config/env.js';
 
 const execAsync = promisify(exec);
@@ -43,13 +44,16 @@ export class DispatcherService {
 
     const tempPdf = path.join(os.tmpdir(), `${jobId}.pdf`);
     const tempPclm = path.join(os.tmpdir(), `${jobId}.pclm`);
+    const nowIso = new Date().toISOString();
 
     try {
       // 1. Update status to PROCESSING
-      await dbService.updateJob(jobId, {
+      const jobProcessing = await dbService.updateJob(jobId, {
         status: 'PROCESSING',
+        startedAt: nowIso,
         message: 'Converting document to HP PCLm raster format at 300 DPI...',
       });
+      if (jobProcessing) sseService.broadcastJobUpdate(jobProcessing);
 
       // 2. Fetch document buffer
       const pdfBuffer = await storageService.getFileBuffer(job.storageKey);
@@ -69,10 +73,11 @@ export class DispatcherService {
       console.log(`[Dispatcher] Successfully generated PCLm stream: ${pclmBuffer.length} bytes`);
 
       // 4. Update status to SENT_TO_PRINTER
-      await dbService.updateJob(jobId, {
+      const jobSent = await dbService.updateJob(jobId, {
         status: 'SENT_TO_PRINTER',
         message: `Transmitting PCLm data to ${printerIp}:${printerPort}...`,
       });
+      if (jobSent) sseService.broadcastJobUpdate(jobSent);
 
       const ippPrinter = ipp.Printer(printerUri);
       const media = job.paperSize === 'Letter' ? 'na_letter_8.5x11in' : 'iso_a4_210x297mm';
@@ -109,31 +114,42 @@ export class DispatcherService {
       }
 
       const printerJobId = String(submitRes['job-attributes-tag']?.['job-id'] || '');
+      const ackTime = new Date().toISOString();
 
       console.log(`[Dispatcher] Print job accepted by printer! Job ID: #${printerJobId}`);
 
       // 5. Update status: PRINTER_ACCEPTED
-      await dbService.updateJob(jobId, {
+      const jobAccepted = await dbService.updateJob(jobId, {
         status: 'PRINTER_ACCEPTED',
         message: `Accepted by HP LaserJet M126nw (Job #${printerJobId})`,
         printerJobId,
+        printerIPPJobId: printerJobId,
+        lastAcknowledgementAt: ackTime,
       });
+      if (jobAccepted) sseService.broadcastJobUpdate(jobAccepted);
 
       // 6. Transition to PRINTING
-      await dbService.updateJob(jobId, {
+      const jobPrinting = await dbService.updateJob(jobId, {
         status: 'PRINTING',
+        printerJobState: 'processing',
         message: 'Printer is physically processing and printing document...',
+        lastAcknowledgementAt: ackTime,
       });
+      if (jobPrinting) sseService.broadcastJobUpdate(jobPrinting);
 
-      // 7. Track completion
+      // 7. Track completion via IPP telemetry
       await this.trackJobUntilFinished(ippPrinter, printerJobId, jobId, job.documentName);
     } catch (err: any) {
       console.error(`[Dispatcher] Print job ${jobId} failed:`, err.message);
-      await dbService.updateJob(jobId, {
+      const failTime = new Date().toISOString();
+      const jobFailed = await dbService.updateJob(jobId, {
         status: 'FAILED',
+        failedAt: failTime,
         message: err.message,
         errorMessage: err.message,
+        printerError: err.message,
       });
+      if (jobFailed) sseService.broadcastJobUpdate(jobFailed);
     } finally {
       // Clean up temp files
       fs.promises.unlink(tempPdf).catch(() => {});
@@ -169,34 +185,58 @@ export class DispatcherService {
           });
         });
 
+        const ackTime = new Date().toISOString();
+
         if (jobRes && jobRes['job-attributes-tag']) {
           const state = jobRes['job-attributes-tag']['job-state'];
           const sheets = jobRes['job-attributes-tag']['job-media-sheets-completed'];
 
           if (state === 'completed' || state === 9) {
             console.log(`[Dispatcher] Job #${printerJobId} reported COMPLETED by printer!`);
-            await dbService.updateJob(jobId, {
+            const jobDone = await dbService.updateJob(jobId, {
               status: 'COMPLETED',
-              message: 'Document physically printed on HP LaserJet M126nw',
+              printerJobState: 'completed',
+              completionVerified: true,
+              completedAt: ackTime,
+              sheetsPrinted: sheets ?? 1,
+              lastAcknowledgementAt: ackTime,
+              message: 'Printer reports that the document has finished printing.',
               verificationDetails: {
-                verifiedAt: new Date().toISOString(),
-                evidence: `Printer reported job-completed via IPP telemetry. Sheets printed: ${sheets ?? 1}`,
+                verifiedAt: ackTime,
+                evidence: `Printer IPP reported job-state: completed (9). Sheets: ${sheets ?? 1}`,
                 finalPrinterState: 'IDLE',
                 sheetsPrinted: sheets ?? 1,
               },
             });
+            if (jobDone) sseService.broadcastJobUpdate(jobDone);
             return;
           }
 
           if (state === 'aborted' || state === 8) {
-            throw new Error('Printing was aborted by printer hardware');
+            const jobAborted = await dbService.updateJob(jobId, {
+              status: 'FAILED',
+              printerJobState: 'aborted',
+              failedAt: ackTime,
+              lastAcknowledgementAt: ackTime,
+              printerError: 'Printing was aborted by printer hardware',
+              message: 'Printer aborted job. Please check printer control panel.',
+            });
+            if (jobAborted) sseService.broadcastJobUpdate(jobAborted);
+            return;
           }
 
           if (state === 'canceled' || state === 7) {
-            throw new Error('Job was canceled on printer');
+            const jobCanceled = await dbService.updateJob(jobId, {
+              status: 'CANCELLED',
+              printerJobState: 'canceled',
+              lastAcknowledgementAt: ackTime,
+              message: 'Job was canceled on printer.',
+            });
+            if (jobCanceled) sseService.broadcastJobUpdate(jobCanceled);
+            return;
           }
         } else {
-          // If printer purged completed job from memory, check printer state
+          // If printer purged completed job from spooler memory, check printer state
           const printerAttrs: any = await new Promise((resolve) => {
             ippPrinter.execute('Get-Printer-Attributes', null, (err: any, res: any) => {
               if (err) resolve(null);
@@ -207,16 +247,21 @@ export class DispatcherService {
           if (printerAttrs && printerAttrs['printer-attributes-tag']) {
             const pState = printerAttrs['printer-attributes-tag']['printer-state'];
             if (pState === 'idle' || pState === 3) {
-              console.log(`[Dispatcher] Printer returned to idle; job #${printerJobId} completed.`);
-              await dbService.updateJob(jobId, {
+              console.log(`[Dispatcher] Printer returned to idle; job #${printerJobId} finished.`);
+              const jobDone = await dbService.updateJob(jobId, {
                 status: 'COMPLETED',
-                message: 'Document physically printed on HP LaserJet M126nw',
+                printerJobState: 'completed',
+                completionVerified: true,
+                completedAt: ackTime,
+                lastAcknowledgementAt: ackTime,
+                message: 'Printer reports that the document has finished printing.',
                 verificationDetails: {
-                  verifiedAt: new Date().toISOString(),
+                  verifiedAt: ackTime,
                   evidence: `Printer returned to idle state with no active errors.`,
                   finalPrinterState: 'IDLE',
                 },
               });
+              if (jobDone) sseService.broadcastJobUpdate(jobDone);
               return;
             }
           }
@@ -226,16 +271,21 @@ export class DispatcherService {
       }
     }
 
-    // If max timeout reached but job was accepted
-    await dbService.updateJob(jobId, {
+    // If max timeout reached and completion not explicitly confirmed:
+    // Follow Rule 17.D: "If completion cannot be verified, display 'Printer accepted job; completion not confirmed'"
+    const finalAck = new Date().toISOString();
+    const jobUnconfirmed = await dbService.updateJob(jobId, {
       status: 'COMPLETED',
-      message: 'Print job accepted and processed by printer hardware.',
+      completionVerified: false,
+      lastAcknowledgementAt: finalAck,
+      message: 'Printer accepted job; completion not confirmed.',
       verificationDetails: {
-        verifiedAt: new Date().toISOString(),
-        evidence: `Job #${printerJobId} was accepted by HP LaserJet M126nw spooler.`,
+        verifiedAt: finalAck,
+        evidence: `Job #${printerJobId} was spooled to HP LaserJet M126nw. Physical output not verified by telemetry.`,
         finalPrinterState: 'IDLE',
       },
     });
+    if (jobUnconfirmed) sseService.broadcastJobUpdate(jobUnconfirmed);
   }
 }
 

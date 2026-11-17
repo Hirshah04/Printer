@@ -21,6 +21,11 @@ export const printerService = {
     const res = await api.post('/api/printer/test-connection');
     return res.data;
   },
+
+  async checkNow(): Promise<Printer> {
+    const res = await api.post('/api/printer/check-now');
+    return res.data.printer;
+  },
 };
 
 // Print Job Service

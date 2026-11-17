@@ -10,6 +10,7 @@ import { apiLimiter } from './middleware/rateLimit.middleware.js';
 import printerRoutes from './routes/printer.routes.js';
 import jobRoutes from './routes/job.routes.js';
 import workerRoutes from './routes/worker.routes.js';
+import { printerMonitorService } from './services/printer-monitor.service.js';
 
 const app = express();
 
@@ -48,7 +49,11 @@ app.listen(config.port, () => {
   console.log(`🚀 Remote Printer API listening on port ${config.port}`);
   console.log(`🖨️  Target Printer: HP LaserJet M126nw @ ${config.printer.ip}`);
   console.log(`💾 Data Storage: File-backed (${config.dataFile}) - No external DB needed`);
+  console.log(`📡 Real-Time Telemetry: 10s IPP Acknowledgement Polling Active`);
   console.log(`====================================================`);
+
+  // Start continuous 10-second IPP monitoring loop
+  printerMonitorService.start();
 });
 
 export default app;
