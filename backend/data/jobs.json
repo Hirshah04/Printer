@@ -1,0 +1,356 @@
+{
+  "printerState": {
+    "name": "HP LaserJet Pro MFP M126nw",
+    "brand": "HP",
+    "model": "HP LaserJet Pro MFP M126nw",
+    "lanIp": "192.168.1.37",
+    "ippPort": 631,
+    "ippEndpoint": "/ipp/printer",
+    "supportedFormats": [
+      "image/urf",
+      "application/PCLm",
+      "application/octet-stream",
+      "image/jpeg"
+    ],
+    "connectionStatus": "UNREACHABLE",
+    "paperStatus": "OK",
+    "tonerStatus": "OK",
+    "stateReasons": [
+      "none"
+    ],
+    "lastSeenAt": "2026-11-17T06:40:48.079Z"
+  },
+  "jobs": [
+    {
+      "documentName": "C++.pdf",
+      "storageKey": "1794897580411-3ad9t6e-C__.pdf",
+      "storageUrl": "/api/jobs/download/1794897580411-3ad9t6e-C__.pdf",
+      "fileSizeBytes": 292888,
+      "pageCount": 1,
+      "copies": 1,
+      "paperSize": "A4",
+      "orientation": "PORTRAIT",
+      "status": "COMPLETED",
+      "statusHistory": [
+        {
+          "status": "QUEUED",
+          "timestamp": "2026-11-17T06:39:40.416Z",
+          "message": "Document queued for printing on HP LaserJet M126nw (192.168.1.37)"
+        },
+        {
+          "status": "PROCESSING",
+          "timestamp": "2026-11-17T06:39:40.424Z",
+          "message": "Converting document to HP PCLm raster format at 300 DPI..."
+        },
+        {
+          "status": "SENT_TO_PRINTER",
+          "timestamp": "2026-11-17T06:39:47.512Z",
+          "message": "Transmitting PCLm data to 192.168.1.37:631..."
+        },
+        {
+          "status": "FAILED",
+          "timestamp": "2026-11-17T06:40:43.389Z",
+          "message": "read ECONNRESET"
+        },
+        {
+          "status": "QUEUED",
+          "timestamp": "2026-11-17T06:41:35.020Z",
+          "message": "Retried manually (Attempt 2)"
+        },
+        {
+          "status": "PROCESSING",
+          "timestamp": "2026-11-17T06:41:35.026Z",
+          "message": "Converting document to HP PCLm raster format at 300 DPI..."
+        },
+        {
+          "status": "SENT_TO_PRINTER",
+          "timestamp": "2026-11-17T06:41:40.525Z",
+          "message": "Transmitting PCLm data to 192.168.1.37:631..."
+        },
+        {
+          "status": "PRINTER_ACCEPTED",
+          "timestamp": "2026-11-17T06:41:41.597Z",
+          "message": "Accepted by HP LaserJet M126nw (Job #417)"
+        },
+        {
+          "status": "PRINTING",
+          "timestamp": "2026-11-17T06:41:41.600Z",
+          "message": "Printer is physically processing and printing document..."
+        },
+        {
+          "status": "CANCELLED",
+          "timestamp": "2026-11-17T06:42:39.072Z",
+          "message": "Job cancelled by user"
+        },
+        {
+          "status": "COMPLETED",
+          "timestamp": "2026-11-17T06:42:41.940Z",
+          "message": "Print job accepted and processed by printer hardware."
+        }
+      ],
+      "_id": "job-1794897580416-hheh3",
+      "retryCount": 1,
+      "maxRetries": 3,
+      "createdAt": "2026-11-17T06:39:40.416Z",
+      "updatedAt": "2026-11-17T06:42:41.940Z",
+      "printerJobId": "417",
+      "verificationDetails": {
+        "verifiedAt": "2026-11-17T06:42:41.940Z",
+        "evidence": "Job #417 was accepted by HP LaserJet M126nw spooler.",
+        "finalPrinterState": "IDLE"
+      }
+    },
+    {
+      "documentName": "Cybersecurity.pdf",
+      "storageKey": "1794897466988-1qwwatn-Cybersecurity.pdf",
+      "storageUrl": "/api/jobs/download/1794897466988-1qwwatn-Cybersecurity.pdf",
+      "fileSizeBytes": 307609,
+      "pageCount": 1,
+      "copies": 1,
+      "paperSize": "A4",
+      "orientation": "LANDSCAPE",
+      "status": "COMPLETED",
+      "statusHistory": [
+        {
+          "status": "QUEUED",
+          "timestamp": "2026-11-17T06:37:46.996Z",
+          "message": "Document queued for printing on HP LaserJet M126nw (192.168.1.37)"
+        },
+        {
+          "status": "PROCESSING",
+          "timestamp": "2026-11-17T06:37:47.011Z",
+          "message": "Converting document to HP PCLm raster format at 300 DPI..."
+        },
+        {
+          "status": "SENT_TO_PRINTER",
+          "timestamp": "2026-11-17T06:37:57.739Z",
+          "message": "Transmitting PCLm data to 192.168.1.37:631..."
+        },
+        {
+          "status": "PRINTER_ACCEPTED",
+          "timestamp": "2026-11-17T06:37:58.581Z",
+          "message": "Accepted by HP LaserJet M126nw (Job #415)"
+        },
+        {
+          "status": "PRINTING",
+          "timestamp": "2026-11-17T06:37:58.588Z",
+          "message": "Printer is physically processing and printing document..."
+        },
+        {
+          "status": "COMPLETED",
+          "timestamp": "2026-11-17T06:39:00.026Z",
+          "message": "Print job accepted and processed by printer hardware."
+        }
+      ],
+      "_id": "job-1794897466997-98i5u",
+      "retryCount": 0,
+      "maxRetries": 3,
+      "createdAt": "2026-11-17T06:37:46.997Z",
+      "updatedAt": "2026-11-17T06:39:00.026Z",
+      "printerJobId": "415",
+      "verificationDetails": {
+        "verifiedAt": "2026-11-17T06:39:00.026Z",
+        "evidence": "Job #415 was accepted by HP LaserJet M126nw spooler.",
+        "finalPrinterState": "IDLE"
+      }
+    },
+    {
+      "documentName": "Cybersecurity.pdf",
+      "storageKey": "1794897203081-7u1hjc0-Cybersecurity.pdf",
+      "storageUrl": "/api/jobs/download/1794897203081-7u1hjc0-Cybersecurity.pdf",
+      "fileSizeBytes": 307609,
+      "pageCount": 1,
+      "copies": 1,
+      "paperSize": "A4",
+      "orientation": "PORTRAIT",
+      "status": "COMPLETED",
+      "statusHistory": [
+        {
+          "status": "QUEUED",
+          "timestamp": "2026-11-17T06:33:23.094Z",
+          "message": "Document queued for printing on HP LaserJet M126nw (192.168.1.37)"
+        },
+        {
+          "status": "PROCESSING",
+          "timestamp": "2026-11-17T06:33:23.108Z",
+          "message": "Converting document to HP PCLm raster format at 300 DPI..."
+        },
+        {
+          "status": "SENT_TO_PRINTER",
+          "timestamp": "2026-11-17T06:33:30.092Z",
+          "message": "Transmitting PCLm data to 192.168.1.37:631..."
+        },
+        {
+          "status": "PRINTER_ACCEPTED",
+          "timestamp": "2026-11-17T06:33:30.858Z",
+          "message": "Accepted by HP LaserJet M126nw (Job #414)"
+        },
+        {
+          "status": "PRINTING",
+          "timestamp": "2026-11-17T06:33:30.860Z",
+          "message": "Printer is physically processing and printing document..."
+        },
+        {
+          "status": "COMPLETED",
+          "timestamp": "2026-11-17T06:34:32.255Z",
+          "message": "Print job accepted and processed by printer hardware."
+        }
+      ],
+      "_id": "job-1794897203095-i07m3",
+      "retryCount": 0,
+      "maxRetries": 3,
+      "createdAt": "2026-11-17T06:33:23.095Z",
+      "updatedAt": "2026-11-17T06:34:32.255Z",
+      "printerJobId": "414",
+      "verificationDetails": {
+        "verifiedAt": "2026-11-17T06:34:32.255Z",
+        "evidence": "Job #414 was accepted by HP LaserJet M126nw spooler.",
+        "finalPrinterState": "IDLE"
+      }
+    },
+    {
+      "documentName": "Cybersecurity.pdf",
+      "storageKey": "1794896104270-9n5cyt3-Cybersecurity.pdf",
+      "storageUrl": "/api/jobs/download/1794896104270-9n5cyt3-Cybersecurity.pdf",
+      "fileSizeBytes": 307609,
+      "pageCount": 1,
+      "copies": 1,
+      "paperSize": "A4",
+      "orientation": "PORTRAIT",
+      "status": "COMPLETED",
+      "statusHistory": [
+        {
+          "status": "QUEUED",
+          "timestamp": "2026-11-17T06:15:04.274Z",
+          "message": "Document queued for printing on HP LaserJet M126nw (192.168.1.37)"
+        },
+        {
+          "status": "PROCESSING",
+          "timestamp": "2026-11-17T06:15:04.279Z",
+          "message": "Rendering document pages at 300 DPI for HP LaserJet M126nw..."
+        },
+        {
+          "status": "SENT_TO_PRINTER",
+          "timestamp": "2026-11-17T06:15:12.137Z",
+          "message": "Transmitting 1 page(s) to 192.168.1.37:631..."
+        },
+        {
+          "status": "PRINTER_ACCEPTED",
+          "timestamp": "2026-11-17T06:15:13.186Z",
+          "message": "Accepted by HP LaserJet M126nw (Job #411)"
+        },
+        {
+          "status": "PRINTING",
+          "timestamp": "2026-11-17T06:15:13.187Z",
+          "message": "Printer is physically processing and printing document..."
+        },
+        {
+          "status": "COMPLETED",
+          "timestamp": "2026-11-17T06:15:17.165Z",
+          "message": "Document physically printed on HP LaserJet M126nw"
+        }
+      ],
+      "_id": "job-1794896104274-9mss8",
+      "retryCount": 0,
+      "maxRetries": 3,
+      "createdAt": "2026-11-17T06:15:04.274Z",
+      "updatedAt": "2026-11-17T06:15:17.165Z",
+      "printerJobId": "411",
+      "verificationDetails": {
+        "verifiedAt": "2026-11-17T06:15:17.165Z",
+        "evidence": "Printer reported job-completed via IPP telemetry. Sheets printed: 0",
+        "finalPrinterState": "IDLE",
+        "sheetsPrinted": 0
+      }
+    },
+    {
+      "documentName": "Data Analytics.pdf",
+      "storageKey": "1794895741958-9argmf7-Data_Analytics.pdf",
+      "storageUrl": "/api/jobs/download/1794895741958-9argmf7-Data_Analytics.pdf",
+      "fileSizeBytes": 325552,
+      "pageCount": 1,
+      "copies": 1,
+      "paperSize": "A4",
+      "orientation": "PORTRAIT",
+      "status": "COMPLETED",
+      "statusHistory": [
+        {
+          "status": "QUEUED",
+          "timestamp": "2026-11-17T06:09:01.966Z",
+          "message": "Document queued for printing on HP LaserJet M126nw (192.168.1.37)"
+        },
+        {
+          "status": "PROCESSING",
+          "timestamp": "2026-11-17T06:09:01.974Z",
+          "message": "Rendering document pages at 300 DPI for HP LaserJet M126nw..."
+        },
+        {
+          "status": "SENT_TO_PRINTER",
+          "timestamp": "2026-11-17T06:09:10.315Z",
+          "message": "Transmitting 1 page(s) to 192.168.1.37:631..."
+        },
+        {
+          "status": "FAILED",
+          "timestamp": "2026-11-17T06:09:11.321Z",
+          "message": "Printer rejected job with status: successful-ok-ignored-or-substituted-attributes"
+        },
+        {
+          "status": "COMPLETED",
+          "timestamp": "2026-11-17T06:12:12.944Z",
+          "message": "Document physically printed on HP LaserJet M126nw"
+        }
+      ],
+      "_id": "job-1794895741966-cc87o",
+      "retryCount": 0,
+      "maxRetries": 3,
+      "createdAt": "2026-11-17T06:09:01.966Z",
+      "updatedAt": "2026-11-17T06:09:11.321Z",
+      "message": "Document physically printed on HP LaserJet M126nw"
+    },
+    {
+      "documentName": "Cybersecurity.pdf",
+      "storageKey": "1794895561095-9506ub4-Cybersecurity.pdf",
+      "storageUrl": "/api/jobs/download/1794895561095-9506ub4-Cybersecurity.pdf",
+      "fileSizeBytes": 307609,
+      "pageCount": 1,
+      "copies": 1,
+      "paperSize": "A4",
+      "orientation": "PORTRAIT",
+      "status": "COMPLETED",
+      "statusHistory": [
+        {
+          "status": "QUEUED",
+          "timestamp": "2026-11-17T06:06:01.103Z",
+          "message": "Document queued for printing on HP LaserJet M126nw (192.168.1.37)"
+        },
+        {
+          "status": "PROCESSING",
+          "timestamp": "2026-11-17T06:06:01.107Z",
+          "message": "Rendering document pages at 300 DPI for HP LaserJet M126nw..."
+        },
+        {
+          "status": "SENT_TO_PRINTER",
+          "timestamp": "2026-11-17T06:06:07.438Z",
+          "message": "Transmitting 1 page(s) to 192.168.1.37:631..."
+        },
+        {
+          "status": "FAILED",
+          "timestamp": "2026-11-17T06:06:09.420Z",
+          "message": "Printer rejected job with status: successful-ok-ignored-or-substituted-attributes"
+        },
+        {
+          "status": "COMPLETED",
+          "timestamp": "2026-11-17T06:12:12.945Z",
+          "message": "Document physically printed on HP LaserJet M126nw"
+        }
+      ],
+      "_id": "job-1794895561104-v97rv",
+      "retryCount": 0,
+      "maxRetries": 3,
+      "createdAt": "2026-11-17T06:06:01.104Z",
+      "updatedAt": "2026-11-17T06:06:09.420Z",
+      "message": "Document physically printed on HP LaserJet M126nw"
+    }
+  ],
+  "lastSaved": "2026-11-17T06:42:41.940Z"
+}
