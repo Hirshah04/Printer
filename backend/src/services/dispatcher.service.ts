@@ -41,38 +41,37 @@ export class DispatcherService {
 
     console.log(`[Dispatcher] Starting execution for job ${jobId} (${job.documentName}) -> ${printerUri}`);
 
-    const tempDir = path.join(os.tmpdir(), `print-${jobId}`);
     const tempPdf = path.join(os.tmpdir(), `${jobId}.pdf`);
+    const tempPclm = path.join(os.tmpdir(), `${jobId}.pclm`);
 
     try {
       // 1. Update status to PROCESSING
       await dbService.updateJob(jobId, {
         status: 'PROCESSING',
-        message: 'Rendering document pages at 300 DPI for HP LaserJet M126nw...',
+        message: 'Converting document to HP PCLm raster format at 300 DPI...',
       });
 
       // 2. Fetch document buffer
       const pdfBuffer = await storageService.getFileBuffer(job.storageKey);
       await fs.promises.writeFile(tempPdf, pdfBuffer);
 
-      // 3. Render PDF to 300 DPI A4 JPEG pages using Python PyMuPDF
-      const scriptPath = path.resolve(process.cwd(), 'src/scripts/render_pdf.py');
-      const cmd = `python "${scriptPath}" "${tempPdf}" "${tempDir}" 300`;
+      // 3. Convert PDF to native HP LaserJet PCLm stream using PyMuPDF PCLm generator
+      const scriptPath = path.resolve(process.cwd(), 'src/scripts/pdf_to_pclm.py');
+      const cmd = `python "${scriptPath}" "${tempPdf}" "${tempPclm}"`;
 
-      const { stdout } = await execAsync(cmd);
-      const renderResult = JSON.parse(stdout.trim());
+      await execAsync(cmd);
 
-      if (!renderResult.success || !renderResult.pages || renderResult.pages.length === 0) {
-        throw new Error(renderResult.error || 'Failed to render PDF pages');
+      if (!fs.existsSync(tempPclm)) {
+        throw new Error('Failed to generate PCLm print data for HP LaserJet');
       }
 
-      const pages: Array<{ index: number; file: string }> = renderResult.pages;
-      console.log(`[Dispatcher] Successfully rendered ${pages.length} page(s) at 300 DPI`);
+      const pclmBuffer = await fs.promises.readFile(tempPclm);
+      console.log(`[Dispatcher] Successfully generated PCLm stream: ${pclmBuffer.length} bytes`);
 
       // 4. Update status to SENT_TO_PRINTER
       await dbService.updateJob(jobId, {
         status: 'SENT_TO_PRINTER',
-        message: `Transmitting ${pages.length} page(s) to ${printerIp}:${printerPort}...`,
+        message: `Transmitting PCLm data to ${printerIp}:${printerPort}...`,
       });
 
       const ippPrinter = ipp.Printer(printerUri);
@@ -85,79 +84,31 @@ export class DispatcherService {
         return false;
       };
 
-      let printerJobId = '';
+      const printMsg: any = {
+        'operation-attributes-tag': {
+          'requesting-user-name': 'AirPrintHub',
+          'job-name': job.documentName,
+          'document-format': 'application/PCLm',
+        },
+        'job-attributes-tag': {
+          copies: job.copies || 1,
+          media,
+        },
+        data: pclmBuffer,
+      };
 
-      if (pages.length === 1) {
-        // Single-page: Submit via Print-Job
-        const pageBuffer = await fs.promises.readFile(pages[0].file);
-
-        const printMsg: any = {
-          'operation-attributes-tag': {
-            'requesting-user-name': 'AirPrintHub',
-            'job-name': job.documentName,
-            'document-format': 'image/jpeg',
-          },
-          'job-attributes-tag': {
-            copies: job.copies || 1,
-            media,
-            'print-color-mode': 'monochrome',
-          },
-          data: pageBuffer,
-        };
-
-        const submitRes: any = await new Promise((resolve, reject) => {
-          ippPrinter.execute('Print-Job', printMsg, (err: any, res: any) => {
-            if (err) reject(err);
-            else resolve(res);
-          });
+      const submitRes: any = await new Promise((resolve, reject) => {
+        ippPrinter.execute('Print-Job', printMsg, (err: any, res: any) => {
+          if (err) reject(err);
+          else resolve(res);
         });
+      });
 
-        if (!isIppSuccess(submitRes?.statusCode, submitRes)) {
-          throw new Error(`Printer rejected job with status: ${submitRes?.statusCode || 'unknown'}`);
-        }
-
-        printerJobId = String(submitRes['job-attributes-tag']?.['job-id'] || '');
-      } else {
-        // Multi-page: Submit each page sequentially via Print-Job
-        // HP M126nw has multiple-document-jobs-supported = false, so each page is submitted as a distinct print job
-        for (let i = 0; i < pages.length; i++) {
-          const pageBuffer = await fs.promises.readFile(pages[i].file);
-          const pageJobName = `${job.documentName} (Page ${i + 1}/${pages.length})`;
-
-          const printMsg: any = {
-            'operation-attributes-tag': {
-              'requesting-user-name': 'AirPrintHub',
-              'job-name': pageJobName,
-              'document-format': 'image/jpeg',
-            },
-            'job-attributes-tag': {
-              copies: job.copies || 1,
-              media,
-              'print-color-mode': 'monochrome',
-            },
-            data: pageBuffer,
-          };
-
-          const submitRes: any = await new Promise((resolve, reject) => {
-            ippPrinter.execute('Print-Job', printMsg, (err: any, res: any) => {
-              if (err) reject(err);
-              else resolve(res);
-            });
-          });
-
-          if (!isIppSuccess(submitRes?.statusCode, submitRes)) {
-            throw new Error(`Printer rejected page ${i + 1} with status: ${submitRes?.statusCode || 'unknown'}`);
-          }
-
-          const pageJobId = String(submitRes['job-attributes-tag']?.['job-id'] || '');
-          if (!printerJobId) printerJobId = pageJobId;
-          console.log(`[Dispatcher] Page ${i + 1}/${pages.length} accepted by printer as Job #${pageJobId}`);
-
-          if (i < pages.length - 1) {
-            await new Promise((r) => setTimeout(r, 1000));
-          }
-        }
+      if (!isIppSuccess(submitRes?.statusCode, submitRes)) {
+        throw new Error(`Printer rejected job with status: ${submitRes?.statusCode || 'unknown'}`);
       }
+
+      const printerJobId = String(submitRes['job-attributes-tag']?.['job-id'] || '');
 
       console.log(`[Dispatcher] Print job accepted by printer! Job ID: #${printerJobId}`);
 
@@ -186,7 +137,7 @@ export class DispatcherService {
     } finally {
       // Clean up temp files
       fs.promises.unlink(tempPdf).catch(() => {});
-      fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      fs.promises.unlink(tempPclm).catch(() => {});
     }
   }
 

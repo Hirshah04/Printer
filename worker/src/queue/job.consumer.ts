@@ -7,6 +7,7 @@ import os from 'os';
 import { config } from '../config/env.js';
 import { vpnMonitor } from '../vpn/vpn.monitor.js';
 import { ippClient } from '../ipp/ipp.client.js';
+import { pclmConverter } from '../converter/pclm.converter.js';
 
 const execAsync = promisify(exec);
 
@@ -99,40 +100,32 @@ export class JobConsumer {
       const pdfBuffer = Buffer.from(downloadRes.data);
       await fs.promises.writeFile(tempPdf, pdfBuffer);
 
-      // 2. Render pages using Python PyMuPDF
-      await this.updateStatus(jobId, 'PROCESSING', 'Rendering pages at 300 DPI for HP LaserJet M126nw...');
+      // 2. Convert PDF to native HP LaserJet PCLm stream using PyMuPDF PCLm generator
+      await this.updateStatus(jobId, 'PROCESSING', 'Converting document to HP PCLm raster stream at 300 DPI...');
 
-      const scriptPath = path.resolve(process.cwd(), 'src/scripts/render_pdf.py');
-      const cmd = `python "${scriptPath}" "${tempPdf}" "${tempDir}" 300`;
+      const conversion = await pclmConverter.convertPdfToPclm(pdfBuffer, {
+        paperSize: job.paperSize || 'A4',
+        resolutionDpi: 300,
+      });
 
-      const { stdout } = await execAsync(cmd);
-      const renderResult = JSON.parse(stdout.trim());
-
-      if (!renderResult.success || !renderResult.pages || renderResult.pages.length === 0) {
-        throw new Error(renderResult.error || 'Failed to render PDF pages');
-      }
-
-      const pages: Array<{ index: number; file: string }> = renderResult.pages;
       const targetLanIp = printer?.lanIp || config.defaultPrinterIp;
       const targetPort = printer?.ippPort || 631;
       const targetEndpoint = printer?.ippEndpoint || '/ipp/printer';
 
       // 3. Submit to printer via IPP
-      await this.updateStatus(jobId, 'SENT_TO_PRINTER', `Sending ${pages.length} page(s) to ${targetLanIp}:${targetPort}...`);
-
-      const firstPageBuffer = await fs.promises.readFile(pages[0].file);
+      await this.updateStatus(jobId, 'SENT_TO_PRINTER', `Sending PCLm data to ${targetLanIp}:${targetPort}...`);
 
       const submitResult = await ippClient.submitJob(
         targetLanIp,
         targetPort,
         targetEndpoint,
-        firstPageBuffer,
+        conversion.buffer,
         {
           documentName: job.documentName,
           copies: job.copies || 1,
           paperSize: job.paperSize || 'A4',
           orientation: job.orientation || 'PORTRAIT',
-          format: 'image/jpeg',
+          format: 'application/PCLm',
         }
       );
 

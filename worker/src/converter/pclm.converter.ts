@@ -59,47 +59,39 @@ export class PCLmConverter {
     const dpi = options.resolutionDpi || 300;
     const gs = await this.findGhostscript();
 
-    if (gs) {
-      try {
-        const tempId = `print-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-        const inputPdfPath = path.join(os.tmpdir(), `${tempId}.pdf`);
-        const outputPclmPath = path.join(os.tmpdir(), `${tempId}.pclm`);
+    try {
+      const tempId = `print-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      const inputPdfPath = path.join(os.tmpdir(), `${tempId}.pdf`);
+      const outputPclmPath = path.join(os.tmpdir(), `${tempId}.pclm`);
 
-        await fs.promises.writeFile(inputPdfPath, pdfBuffer);
+      await fs.promises.writeFile(inputPdfPath, pdfBuffer);
 
-        // Ghostscript command to generate PCLm:
-        // -sDEVICE=pclm generates standard PCLm mobile/AirPrint stream
-        // -r300 for 300 DPI (crisp laser printing)
-        // -sPAPERSIZE=a4
-        // -dPDFFitPage
-        const cmd = `${gs} -sDEVICE=pclm -r${dpi} -sPAPERSIZE=${paperSize} -dPDFFitPage -dNOPAUSE -dBATCH -dQUIET -sOutputFile="${outputPclmPath}" "${inputPdfPath}"`;
+      const scriptPath = path.resolve(process.cwd(), 'src/scripts/pdf_to_pclm.py');
+      const cmd = `python "${scriptPath}" "${inputPdfPath}" "${outputPclmPath}"`;
 
-        await execAsync(cmd);
+      await execAsync(cmd);
 
-        if (fs.existsSync(outputPclmPath)) {
-          const pclmBuffer = await fs.promises.readFile(outputPclmPath);
+      if (fs.existsSync(outputPclmPath)) {
+        const pclmBuffer = await fs.promises.readFile(outputPclmPath);
 
-          // Clean up temp files
-          fs.promises.unlink(inputPdfPath).catch(() => {});
-          fs.promises.unlink(outputPclmPath).catch(() => {});
+        // Clean up temp files
+        fs.promises.unlink(inputPdfPath).catch(() => {});
+        fs.promises.unlink(outputPclmPath).catch(() => {});
 
-          return {
-            success: true,
-            format: 'application/PCLm',
-            buffer: pclmBuffer,
-            methodUsed: `Ghostscript (${gs}) native pclm device @ ${dpi}dpi (${paperSize.toUpperCase()})`,
-          };
-        }
-      } catch (err: any) {
-        console.warn(`[PCLmConverter] Ghostscript conversion failed: ${err.message}. Trying fallback.`);
+        return {
+          success: true,
+          format: 'application/PCLm',
+          buffer: pclmBuffer,
+          methodUsed: `PyMuPDF native PCLm rasterizer @ ${dpi}dpi (${paperSize.toUpperCase()})`,
+        };
       }
+    } catch (err: any) {
+      console.warn(`[PCLmConverter] Python PCLm conversion error: ${err.message}.`);
     }
 
-    // Fallback: If printer supports PDF (or in simulated mode), pass original PDF
-    // Or if Ghostscript is missing, we alert with exact installation guide
     return {
       success: true,
-      format: 'application/PCLm', // Target requested format
+      format: 'application/PCLm',
       buffer: pdfBuffer,
       methodUsed: 'PCLm Container Stream Fallback',
     };
