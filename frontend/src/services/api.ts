@@ -5,9 +5,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
+  timeout: 120000, // 2-minute ceiling to allow Render free tier wake-up from another network
 });
 
 // Single Printer Service (HP LaserJet M126nw @ 192.168.1.37)
@@ -32,9 +30,6 @@ export const printerService = {
 export const jobService = {
   async createJob(formData: FormData, onUploadProgress?: (progress: number) => void): Promise<{ job: PrintJob; preview: any }> {
     const res = await api.post('/api/jobs', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
       onUploadProgress: (progressEvent) => {
         if (progressEvent.total && onUploadProgress) {
           const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);

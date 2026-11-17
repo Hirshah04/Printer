@@ -6,7 +6,14 @@ import { config } from '../config/env.js';
 const storage = multer.memoryStorage();
 
 const fileFilter = (req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
-  if (file.mimetype === 'application/pdf' || file.originalname.toLowerCase().endsWith('.pdf')) {
+  const name = (file.originalname || '').toLowerCase();
+  const mime = (file.mimetype || '').toLowerCase();
+  const isPdf =
+    mime.includes('pdf') ||
+    mime === 'application/octet-stream' ||
+    name.endsWith('.pdf');
+
+  if (isPdf) {
     cb(null, true);
   } else {
     cb(new Error('Only PDF documents (.pdf) are allowed.'));

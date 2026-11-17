@@ -176,15 +176,6 @@ export class DispatcherService {
       let userFriendlyMessage = err.message;
       if (isPrivateIp && isNetworkTimeout) {
         userFriendlyMessage = `Cannot reach private IP ${printerIp} directly from cloud server. Please start the local print worker on your home Wi-Fi or configure router port forwarding.`;
-
-        // Keep job in QUEUED status so the local print worker can pick it up immediately!
-        const jobQueued = await dbService.updateJob(jobId, {
-          status: 'QUEUED',
-          message: userFriendlyMessage,
-          errorMessage: userFriendlyMessage,
-        });
-        if (jobQueued) sseService.broadcastJobUpdate(jobQueued);
-        return;
       }
 
       const failTime = new Date().toISOString();

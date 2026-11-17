@@ -3,6 +3,7 @@ import { printerService, jobService } from '../services/api';
 import { realtimeClient } from '../services/realtime';
 import { Printer, PrintJob, PrinterOperationalStatus } from '../types';
 import { StatusBadge } from '../components/StatusBadge';
+import { DebugConsole, ConsoleLogEntry } from '../components/DebugConsole';
 import {
   FileUp,
   FileText,
@@ -35,34 +36,105 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
   const [isChecking, setIsChecking] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [activeJob, setActiveJob] = useState<PrintJob | null>(null);
+  const [logs, setLogs] = useState<ConsoleLogEntry[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const addLog = (
+    level: ConsoleLogEntry['level'],
+    category: ConsoleLogEntry['category'],
+    message: string,
+    details?: any
+  ) => {
+    const time =
+      new Date().toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      }) +
+      '.' +
+      String(Date.now() % 1000).padStart(3, '0');
+
+    setLogs((prev) => [
+      ...prev.slice(-150),
+      {
+        id: Math.random().toString(36).substring(2, 9),
+        timestamp: time,
+        level,
+        category,
+        message,
+        details,
+      },
+    ]);
+  };
+
   useEffect(() => {
-    printerService.getPrinter().then(setPrinter).catch(() => {});
+    const cloudUrl = import.meta.env.VITE_API_URL || 'Local / Direct';
+    addLog('info', 'SYSTEM', `AirPrint Hub initialized. Backend URL: ${cloudUrl}`);
+    addLog('info', 'PRINTER', 'Target Hardware: HP LaserJet Pro MFP M126nw (192.168.1.37:9100 / 631)');
+
+    printerService
+      .getPrinter()
+      .then((p) => {
+        setPrinter(p);
+        addLog('info', 'PRINTER', `Current printer state: ${p.currentStatus} (${p.connectionStatus})`);
+      })
+      .catch((err) => {
+        addLog('warn', 'NET', `Could not fetch initial printer info: ${err.message}`);
+      });
 
     // Subscribe to SSE updates
     const unsubPrinter = realtimeClient.onPrinter((updated) => {
       setPrinter(updated);
+      addLog('info', 'PRINTER', `Printer state update: ${updated.currentStatus} (Toner: ${updated.tonerStatus}, Paper: ${updated.paperStatus})`);
     });
 
     const unsubJob = realtimeClient.onJob((updatedJob) => {
-      setActiveJob((prev) => (prev && prev._id === updatedJob._id ? updatedJob : prev));
+      setActiveJob((prev) => {
+        if (!prev || prev._id === updatedJob._id) {
+          const lvl =
+            updatedJob.status === 'COMPLETED'
+              ? 'success'
+              : updatedJob.status === 'FAILED'
+              ? 'error'
+              : 'info';
+          const cat = updatedJob.status === 'FAILED' ? 'PRINTER' : 'DISPATCH';
+          addLog(
+            lvl,
+            cat,
+            `Job #${updatedJob._id.slice(-6)} -> [${updatedJob.status}] ${updatedJob.message || updatedJob.errorMessage || ''}`
+          );
+          return updatedJob;
+        }
+        return prev;
+      });
+    });
+
+    const unsubStatus = realtimeClient.onStatus((connected) => {
+      addLog(
+        connected ? 'success' : 'warn',
+        'NET',
+        connected ? 'SSE Real-time telemetry stream connected.' : 'SSE telemetry stream disconnected. Retrying...'
+      );
     });
 
     return () => {
       unsubPrinter();
       unsubJob();
+      unsubStatus();
     };
   }, []);
 
   const handleCheckNow = async () => {
     setIsChecking(true);
+    addLog('info', 'PRINTER', 'Triggering manual printer telemetry polling cycle...');
     try {
       const updated = await printerService.checkNow();
       setPrinter(updated);
-    } catch {
-      // Handled
+      addLog('success', 'PRINTER', `Telemetry received: ${updated.currentStatus} (${updated.connectionStatus})`);
+    } catch (err: any) {
+      addLog('error', 'NET', `Telemetry check failed: ${err.message}`);
     } finally {
       setIsChecking(false);
     }
@@ -85,15 +157,26 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
   };
 
   const validateAndSetFile = (selected: File) => {
-    if (selected.type !== 'application/pdf' && !selected.name.toLowerCase().endsWith('.pdf')) {
-      setError('Only PDF documents (.pdf) are supported.');
+    const name = selected.name.toLowerCase();
+    const isPdf = selected.type.includes('pdf') || name.endsWith('.pdf');
+    if (!isPdf) {
+      const msg = 'Only PDF documents (.pdf) are supported.';
+      setError(msg);
+      addLog('warn', 'UPLOAD', msg);
       return;
     }
     if (selected.size > 25 * 1024 * 1024) {
-      setError('File size exceeds the 25MB maximum limit.');
+      const msg = 'File size exceeds the 25MB maximum limit.';
+      setError(msg);
+      addLog('warn', 'UPLOAD', msg);
       return;
     }
     setFile(selected);
+    addLog(
+      'info',
+      'UPLOAD',
+      `PDF file selected: "${selected.name}" (${(selected.size / 1024).toFixed(1)} KB, mime: ${selected.type || 'application/pdf'})`
+    );
   };
 
   const handlePrintSubmit = async (e: React.FormEvent) => {
@@ -113,14 +196,30 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
     formData.append('paperSize', paperSize);
     formData.append('orientation', orientation);
 
+    addLog(
+      'info',
+      'UPLOAD',
+      `Uploading "${file.name}" to cloud backend (${copies}x copies, ${paperSize}, ${orientation})...`
+    );
+
     try {
       const res = await jobService.createJob(formData, (progress) => {
         setUploadProgress(progress);
+        if (progress === 100) {
+          addLog('info', 'UPLOAD', 'Upload transmission 100% complete. Waiting for server registration...');
+        }
       });
 
       setActiveJob(res.job);
+      addLog(
+        'success',
+        'DISPATCH',
+        `Job registered on backend: #${res.job._id.slice(-6)} (Status: ${res.job.status}, Pages: ${res.preview?.pageCount || '?'})`
+      );
     } catch (err: any) {
-      setError(err.response?.data?.message || err.message || 'Failed to submit print job');
+      const errMsg = err.response?.data?.message || err.message || 'Failed to submit print job';
+      setError(errMsg);
+      addLog('error', 'NET', `Print upload error: ${errMsg}`, err.response?.data);
     } finally {
       setIsSubmitting(false);
     }
@@ -547,6 +646,16 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
           </div>
         </div>
       )}
+
+      {/* Live Console & Debug Diagnostics Drawer */}
+      <div className="pt-2">
+        <DebugConsole
+          logs={logs}
+          onClear={() => setLogs([])}
+          backendUrl={import.meta.env.VITE_API_URL || 'Local / Direct'}
+          printerIp={printer?.lanIp || '192.168.1.37'}
+        />
+      </div>
     </div>
   );
 };
