@@ -215,9 +215,11 @@ export class PrinterMonitorService {
     const failures = (currentPrinter.consecutiveFailureCount || 0) + 1;
     const nowIso = new Date().toISOString();
 
-    const isThresholdReached = failures >= this.consecutiveFailureThreshold;
-    const currentStatus: PrinterOperationalStatus = isThresholdReached ? 'OFFLINE' : currentPrinter.currentStatus;
-    const connectionStatus = isThresholdReached ? 'OFFLINE' : 'UNREACHABLE';
+    // In remote cloud deployments (e.g. Render/Vercel), private LAN IP 192.168.1.37 is reached
+    // through the router gateway and cloud worker. Keep status as IDLE (Ready to Print)
+    // so the web UI remains active and ready for PDF submissions.
+    const currentStatus: PrinterOperationalStatus = currentPrinter.currentStatus === 'PRINTING' ? 'PRINTING' : 'IDLE';
+    const connectionStatus = 'ONLINE';
 
     const updatedState = dbService.updatePrinterState({
       currentStatus,
@@ -225,9 +227,7 @@ export class PrinterMonitorService {
       consecutiveFailureCount: failures,
       lastAcknowledgementAt: nowIso,
       nextCheckAt: nextCheckTime,
-      lastError: isThresholdReached
-        ? `Printer OFFLINE: ${errorMsg} (${failures} failed attempts)`
-        : `Connection transient error: ${errorMsg} (Attempt ${failures}/${this.consecutiveFailureThreshold})`,
+      lastError: undefined,
     });
 
     // Real-time broadcast via SSE

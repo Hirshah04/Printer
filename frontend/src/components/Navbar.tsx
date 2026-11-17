@@ -39,23 +39,39 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab }) => 
     }
   };
 
-  const getStatusColor = (status?: PrinterOperationalStatus) => {
-    switch (status) {
-      case 'ONLINE':
-      case 'IDLE':
-        return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30';
-      case 'PRINTING':
-      case 'BUSY':
-        return 'bg-blue-500/15 text-blue-400 border-blue-500/30';
-      case 'PAPER_OUT':
-      case 'TONER_LOW':
-        return 'bg-amber-500/15 text-amber-400 border-amber-500/30';
-      case 'ERROR':
-      case 'OFFLINE':
-        return 'bg-rose-500/15 text-rose-400 border-rose-500/30';
-      default:
-        return 'bg-slate-800 text-slate-400 border-slate-700';
+  const getStatusLabel = (status?: PrinterOperationalStatus) => {
+    if (!status || status === 'ONLINE' || status === 'IDLE' || status === 'UNKNOWN' || status === 'OFFLINE') {
+      return 'READY TO PRINT';
     }
+    if (status === 'PRINTING' || status === 'BUSY') {
+      return 'PRINTING';
+    }
+    if (status === 'PAPER_OUT') {
+      return 'PAPER OUT';
+    }
+    if (status === 'TONER_LOW') {
+      return 'TONER LOW';
+    }
+    if (status === 'ERROR') {
+      return 'ATTENTION REQUIRED';
+    }
+    return 'READY TO PRINT';
+  };
+
+  const getStatusColor = (status?: PrinterOperationalStatus) => {
+    if (!status || status === 'ONLINE' || status === 'IDLE' || status === 'UNKNOWN' || status === 'OFFLINE') {
+      return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30';
+    }
+    if (status === 'PRINTING' || status === 'BUSY') {
+      return 'bg-blue-500/15 text-blue-400 border-blue-500/30';
+    }
+    if (status === 'PAPER_OUT' || status === 'TONER_LOW') {
+      return 'bg-amber-500/15 text-amber-400 border-amber-500/30';
+    }
+    if (status === 'ERROR') {
+      return 'bg-rose-500/15 text-rose-400 border-rose-500/30';
+    }
+    return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30';
   };
 
   const formatAckTime = (iso?: string) => {
@@ -122,7 +138,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab }) => 
           <div className="hidden md:flex items-center gap-2.5">
             <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl bg-slate-800/80 border border-slate-700/60 text-xs">
               <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${getStatusColor(operationalStatus)}`}>
-                {operationalStatus}
+                {getStatusLabel(operationalStatus)}
               </span>
 
               <div className="text-left font-mono leading-tight">

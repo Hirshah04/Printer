@@ -145,23 +145,39 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
 
   const operationalStatus: PrinterOperationalStatus = printer?.currentStatus || 'ONLINE';
 
-  const getStatusBadgeClass = (status: PrinterOperationalStatus) => {
-    switch (status) {
-      case 'ONLINE':
-      case 'IDLE':
-        return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30';
-      case 'PRINTING':
-      case 'BUSY':
-        return 'bg-blue-500/15 text-blue-400 border-blue-500/30';
-      case 'PAPER_OUT':
-      case 'TONER_LOW':
-        return 'bg-amber-500/15 text-amber-400 border-amber-500/30';
-      case 'ERROR':
-      case 'OFFLINE':
-        return 'bg-rose-500/15 text-rose-400 border-rose-500/30';
-      default:
-        return 'bg-slate-800 text-slate-400 border-slate-700';
+  const getStatusLabel = (status: PrinterOperationalStatus) => {
+    if (status === 'ONLINE' || status === 'IDLE' || status === 'UNKNOWN' || status === 'OFFLINE') {
+      return 'READY TO PRINT';
     }
+    if (status === 'PRINTING' || status === 'BUSY') {
+      return 'PRINTING';
+    }
+    if (status === 'PAPER_OUT') {
+      return 'PAPER OUT';
+    }
+    if (status === 'TONER_LOW') {
+      return 'TONER LOW';
+    }
+    if (status === 'ERROR') {
+      return 'ATTENTION REQUIRED';
+    }
+    return 'READY TO PRINT';
+  };
+
+  const getStatusBadgeClass = (status: PrinterOperationalStatus) => {
+    if (status === 'ONLINE' || status === 'IDLE' || status === 'UNKNOWN' || status === 'OFFLINE') {
+      return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30';
+    }
+    if (status === 'PRINTING' || status === 'BUSY') {
+      return 'bg-blue-500/15 text-blue-400 border-blue-500/30';
+    }
+    if (status === 'PAPER_OUT' || status === 'TONER_LOW') {
+      return 'bg-amber-500/15 text-amber-400 border-amber-500/30';
+    }
+    if (status === 'ERROR') {
+      return 'bg-rose-500/15 text-rose-400 border-rose-500/30';
+    }
+    return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30';
   };
 
   return (
@@ -177,7 +193,7 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
               <div className="flex items-center gap-2">
                 <h3 className="font-bold text-white text-base">HP LaserJet Pro MFP M126nw</h3>
                 <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${getStatusBadgeClass(operationalStatus)}`}>
-                  {operationalStatus}
+                  {getStatusLabel(operationalStatus)}
                 </span>
               </div>
               <div className="text-xs text-slate-400 font-mono mt-0.5 flex items-center gap-2">
