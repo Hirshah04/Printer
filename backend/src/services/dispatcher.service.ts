@@ -65,7 +65,7 @@ export class DispatcherService {
       const scriptPath = fs.existsSync(path.resolve(process.cwd(), 'dist/scripts/pdf_to_pclm.py'))
         ? path.resolve(process.cwd(), 'dist/scripts/pdf_to_pclm.py')
         : path.resolve(process.cwd(), 'src/scripts/pdf_to_pclm.py');
-      const cmd = `"${pyBin}" "${scriptPath}" "${tempPdf}" "${tempPclm}" 600`;
+      const cmd = `"${pyBin}" "${scriptPath}" "${tempPdf}" "${tempPclm}" 600 "${job.paperSize || 'A4'}"`;
 
       await execAsync(cmd);
 

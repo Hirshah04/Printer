@@ -152,9 +152,10 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
   };
 
   const validateAndSetFile = (selected: File) => {
-    const name = selected.name.toLowerCase();
-    const isPdf = selected.type.includes('pdf') || name.endsWith('.pdf');
-    if (!isPdf) {
+    const name = (selected.name || '').toLowerCase();
+    const type = (selected.type || '').toLowerCase();
+    const isPdf = type.includes('pdf') || name.endsWith('.pdf') || type === '' || type.includes('octet-stream');
+    if (!isPdf && name.includes('.') && !name.endsWith('.pdf')) {
       const msg = 'Only PDF documents (.pdf) are supported.';
       setError(msg);
       addLog('warn', 'UPLOAD', msg);
@@ -167,6 +168,7 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
       return;
     }
     setFile(selected);
+    setError('');
     addLog(
       'info',
       'UPLOAD',
@@ -343,16 +345,16 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
 
       {!activeJob ? (
         <form onSubmit={handlePrintSubmit} className="space-y-6">
-          {/* Drag & Drop Upload Zone */}
-          <div
+          {/* Mobile-Friendly Drag & Drop / Tap Upload Zone */}
+          <label
+            htmlFor="pdf-file-input"
             onDragOver={(e) => {
               e.preventDefault();
               setIsDragging(true);
             }}
             onDragLeave={() => setIsDragging(false)}
             onDrop={handleFileDrop}
-            onClick={() => fileInputRef.current?.click()}
-            className={`relative border-2 border-dashed rounded-3xl p-8 sm:p-12 text-center cursor-pointer transition-all ${
+            className={`block relative border-2 border-dashed rounded-3xl p-8 sm:p-12 text-center cursor-pointer transition-all ${
               isDragging
                 ? 'border-brand-400 bg-brand-500/10 scale-[1.01]'
                 : file
@@ -361,11 +363,12 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
             }`}
           >
             <input
+              id="pdf-file-input"
               ref={fileInputRef}
               type="file"
               accept=".pdf,application/pdf"
               onChange={handleFileSelect}
-              className="hidden"
+              className="sr-only"
             />
 
             {file ? (
@@ -380,6 +383,7 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
                 <button
                   type="button"
                   onClick={(e) => {
+                    e.preventDefault();
                     e.stopPropagation();
                     resetForm();
                   }}
@@ -394,14 +398,18 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
                   <FileUp className="h-10 w-10" />
                 </div>
                 <h4 className="text-base sm:text-lg font-semibold text-white">
-                  Drop your PDF here, or <span className="text-brand-400">browse files</span>
+                  Drop your PDF here, or <span className="text-brand-400">tap to browse</span>
                 </h4>
                 <p className="text-xs text-slate-400 mt-1">
-                  Upload any PDF document. Directly transmitted across Wi-Fi to 192.168.1.37.
+                  Upload any PDF document. Directly transmitted across Wi-Fi to {printer?.lanIp || '103.209.67.76'}.
                 </p>
+                <div className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-medium text-xs shadow-md shadow-brand-600/30">
+                  <FileUp className="h-3.5 w-3.5" />
+                  <span>Choose PDF File</span>
+                </div>
               </div>
             )}
-          </div>
+          </label>
 
           {/* Preferences Box */}
           <div className="p-6 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-5">
