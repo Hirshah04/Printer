@@ -3,7 +3,6 @@ import { printerService, jobService } from '../services/api';
 import { realtimeClient } from '../services/realtime';
 import { Printer, PrintJob, PrinterOperationalStatus } from '../types';
 import { StatusBadge } from '../components/StatusBadge';
-import { DebugConsole, ConsoleLogEntry } from '../components/DebugConsole';
 import {
   FileUp,
   FileText,
@@ -36,37 +35,33 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
   const [isChecking, setIsChecking] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [activeJob, setActiveJob] = useState<PrintJob | null>(null);
-  const [logs, setLogs] = useState<ConsoleLogEntry[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Directly log telemetry and diagnostics to Google / Browser Developer Console
   const addLog = (
-    level: ConsoleLogEntry['level'],
-    category: ConsoleLogEntry['category'],
+    level: 'info' | 'success' | 'warn' | 'error' | 'network' | 'printer',
+    category: string,
     message: string,
     details?: any
   ) => {
-    const time =
-      new Date().toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false,
-      }) +
-      '.' +
-      String(Date.now() % 1000).padStart(3, '0');
+    const time = new Date().toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+    const tag = `[${time}] [AirPrint Hub][${category}]`;
 
-    setLogs((prev) => [
-      ...prev.slice(-150),
-      {
-        id: Math.random().toString(36).substring(2, 9),
-        timestamp: time,
-        level,
-        category,
-        message,
-        details,
-      },
-    ]);
+    if (level === 'error') {
+      console.error(`%c${tag} ${message}`, 'color: #f43f5e; font-weight: bold;', details || '');
+    } else if (level === 'warn') {
+      console.warn(`%c${tag} ${message}`, 'color: #f59e0b; font-weight: bold;', details || '');
+    } else if (level === 'success') {
+      console.info(`%c${tag} ${message}`, 'color: #10b981; font-weight: bold;', details || '');
+    } else {
+      console.log(`%c${tag} ${message}`, 'color: #38bdf8;', details || '');
+    }
   };
 
   useEffect(() => {
@@ -646,16 +641,6 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
           </div>
         </div>
       )}
-
-      {/* Live Console & Debug Diagnostics Drawer */}
-      <div className="pt-2">
-        <DebugConsole
-          logs={logs}
-          onClear={() => setLogs([])}
-          backendUrl={import.meta.env.VITE_API_URL || 'Local / Direct'}
-          printerIp={printer?.lanIp || '192.168.1.37'}
-        />
-      </div>
     </div>
   );
 };
