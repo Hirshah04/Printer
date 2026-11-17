@@ -9,20 +9,17 @@ import {
   CheckCircle2,
   AlertCircle,
   Copy,
-  Layers,
   Sparkles,
   ArrowRight,
   RefreshCw,
 } from 'lucide-react';
 
 interface PrintPageProps {
-  onJobCreated?: (job: PrintJob) => void;
   onNavigateHistory?: () => void;
 }
 
-export const PrintPage: React.FC<PrintPageProps> = ({ onJobCreated, onNavigateHistory }) => {
-  const [printers, setPrinters] = useState<Printer[]>([]);
-  const [selectedPrinterId, setSelectedPrinterId] = useState<string>('');
+export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
+  const [printer, setPrinter] = useState<Printer | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [copies, setCopies] = useState<number>(1);
   const [paperSize, setPaperSize] = useState<'A4' | 'Letter'>('A4');
@@ -36,14 +33,10 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onJobCreated, onNavigateHi
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    printerService.getPrinters().then((list) => {
-      setPrinters(list);
-      const def = list.find((p) => p.isDefault) || list[0];
-      if (def) setSelectedPrinterId(def._id);
-    });
+    printerService.getPrinter().then(setPrinter).catch(() => {});
   }, []);
 
-  // Poll active job status if tracking
+  // Poll active job status
   useEffect(() => {
     if (!activeJob || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(activeJob.status)) return;
 
@@ -52,9 +45,9 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onJobCreated, onNavigateHi
         const updated = await jobService.getJobById(activeJob._id);
         setActiveJob(updated);
       } catch {
-        // Continue polling
+        // Ignored
       }
-    }, 2500);
+    }, 2000);
 
     return () => clearInterval(interval);
   }, [activeJob]);
@@ -77,7 +70,7 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onJobCreated, onNavigateHi
 
   const validateAndSetFile = (selected: File) => {
     if (selected.type !== 'application/pdf' && !selected.name.toLowerCase().endsWith('.pdf')) {
-      setError('Only PDF documents are supported for printing.');
+      setError('Only PDF documents (.pdf) are supported.');
       return;
     }
     if (selected.size > 25 * 1024 * 1024) {
@@ -100,7 +93,6 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onJobCreated, onNavigateHi
 
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('printerId', selectedPrinterId);
     formData.append('copies', String(copies));
     formData.append('paperSize', paperSize);
     formData.append('orientation', orientation);
@@ -111,7 +103,6 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onJobCreated, onNavigateHi
       });
 
       setActiveJob(res.job);
-      if (onJobCreated) onJobCreated(res.job);
     } catch (err: any) {
       setError(err.response?.data?.message || err.message || 'Failed to submit print job');
     } finally {
@@ -128,16 +119,30 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onJobCreated, onNavigateHi
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8">
-      {/* Title */}
-      <div>
-        <h2 className="text-2xl font-bold text-white flex items-center gap-2">
-          <FileUp className="h-6 w-6 text-brand-400" />
-          Print PDF Document
-        </h2>
-        <p className="text-sm text-slate-400 mt-1">
-          Securely submit your PDF across the internet to your private network printer
-        </p>
+    <div className="max-w-3xl mx-auto space-y-6">
+      {/* Target Printer Banner */}
+      <div className="p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 flex items-center justify-between">
+        <div className="flex items-center gap-3.5">
+          <div className="p-2.5 rounded-xl bg-slate-800 text-brand-400 border border-slate-700">
+            <PrinterIcon className="h-5 w-5" />
+          </div>
+          <div>
+            <h3 className="font-bold text-white text-base">HP LaserJet Pro MFP M126nw</h3>
+            <div className="text-xs text-slate-400 font-mono mt-0.5">
+              Printer LAN IP: <span className="text-white font-semibold">192.168.1.37:631</span> &bull; Format: <span className="text-brand-300">PCLm (Auto)</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
+            printer?.connectionStatus === 'ONLINE'
+              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+              : 'bg-slate-800 text-slate-400 border border-slate-700'
+          }`}>
+            {printer?.connectionStatus || 'ONLINE'}
+          </span>
+        </div>
       </div>
 
       {error && (
@@ -147,10 +152,9 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onJobCreated, onNavigateHi
         </div>
       )}
 
-      {/* Main Print Form or Active Job Stepper */}
       {!activeJob ? (
         <form onSubmit={handlePrintSubmit} className="space-y-6">
-          {/* Drag & Drop Upload Box */}
+          {/* Drag & Drop Upload Zone */}
           <div
             onDragOver={(e) => {
               e.preventDefault();
@@ -182,7 +186,7 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onJobCreated, onNavigateHi
                 </div>
                 <h4 className="text-lg font-bold text-white max-w-md truncate">{file.name}</h4>
                 <p className="text-xs text-slate-400 mt-1 font-mono">
-                  {(file.size / 1024 / 1024).toFixed(2)} MB &bull; Ready for PCLm Conversion
+                  {(file.size / 1024 / 1024).toFixed(2)} MB &bull; Converted to PCLm for HP M126nw
                 </p>
                 <button
                   type="button"
@@ -203,45 +207,24 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onJobCreated, onNavigateHi
                 <h4 className="text-base sm:text-lg font-semibold text-white">
                   Drop your PDF here, or <span className="text-brand-400">browse files</span>
                 </h4>
-                <p className="text-xs text-slate-400 mt-1 max-w-sm">
-                  Supports standard PDF documents up to 25MB. Target paper format: A4.
+                <p className="text-xs text-slate-400 mt-1">
+                  Upload any PDF document. Automatically converted & sent to 192.168.1.37.
                 </p>
               </div>
             )}
           </div>
 
-          {/* Print Options Card */}
-          <div className="p-6 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-6">
-            <h3 className="font-semibold text-sm uppercase tracking-wider text-slate-400">
-              Print Job Preferences
+          {/* Preferences Box */}
+          <div className="p-6 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-5">
+            <h3 className="font-semibold text-xs uppercase tracking-wider text-slate-400">
+              Print Settings
             </h3>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {/* Target Printer */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {/* Copies */}
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                  Target Printer
-                </label>
-                <div className="relative">
-                  <PrinterIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
-                  <select
-                    value={selectedPrinterId}
-                    onChange={(e) => setSelectedPrinterId(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white focus:ring-2 focus:ring-brand-500 focus:outline-none appearance-none"
-                  >
-                    {printers.map((p) => (
-                      <option key={p._id} value={p._id}>
-                        {p.name} ({p.lanIp}) - {p.connectionStatus}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {/* Number of Copies */}
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                  Number of Copies
+                  Copies
                 </label>
                 <div className="relative">
                   <Copy className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
@@ -261,17 +244,17 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onJobCreated, onNavigateHi
                 <label className="block text-xs font-medium text-slate-300 mb-1.5">
                   Paper Size
                 </label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 gap-1.5">
                   <button
                     type="button"
                     onClick={() => setPaperSize('A4')}
                     className={`py-2 text-xs font-semibold rounded-xl border transition-all ${
                       paperSize === 'A4'
                         ? 'bg-brand-600 border-brand-500 text-white shadow-md shadow-brand-500/20'
-                        : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-750'
+                        : 'bg-slate-800 border-slate-700 text-slate-300'
                     }`}
                   >
-                    A4 (210 x 297 mm)
+                    A4 (HP Default)
                   </button>
                   <button
                     type="button"
@@ -279,10 +262,10 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onJobCreated, onNavigateHi
                     className={`py-2 text-xs font-semibold rounded-xl border transition-all ${
                       paperSize === 'Letter'
                         ? 'bg-brand-600 border-brand-500 text-white shadow-md shadow-brand-500/20'
-                        : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-750'
+                        : 'bg-slate-800 border-slate-700 text-slate-300'
                     }`}
                   >
-                    Letter (8.5 x 11 in)
+                    Letter
                   </button>
                 </div>
               </div>
@@ -292,16 +275,16 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onJobCreated, onNavigateHi
                 <label className="block text-xs font-medium text-slate-300 mb-1.5">
                   Orientation
                 </label>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-3 gap-1">
                   {(['PORTRAIT', 'LANDSCAPE', 'AUTO'] as const).map((mode) => (
                     <button
                       key={mode}
                       type="button"
                       onClick={() => setOrientation(mode)}
-                      className={`py-2 text-xs font-semibold rounded-xl border capitalize transition-all ${
+                      className={`py-2 text-[11px] font-semibold rounded-xl border capitalize transition-all ${
                         orientation === mode
-                          ? 'bg-brand-600 border-brand-500 text-white shadow-md shadow-brand-500/20'
-                          : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-750'
+                          ? 'bg-brand-600 border-brand-500 text-white'
+                          : 'bg-slate-800 border-slate-700 text-slate-300'
                       }`}
                     >
                       {mode.toLowerCase()}
@@ -311,11 +294,11 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onJobCreated, onNavigateHi
               </div>
             </div>
 
-            {/* Submit Button */}
+            {/* Submit Bar */}
             <div className="pt-4 border-t border-slate-800 flex items-center justify-between">
-              <div className="text-xs text-slate-400">
-                PCLm conversion & IPP protocol handled automatically.
-              </div>
+              <span className="text-xs text-slate-400">
+                Direct to 192.168.1.37 via Router VPN
+              </span>
               <button
                 type="submit"
                 disabled={!file || isSubmitting}
@@ -342,40 +325,40 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onJobCreated, onNavigateHi
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-800">
             <div>
               <span className="text-xs font-mono uppercase tracking-wider text-slate-400">
-                Live Print Job Monitor
+                Live Print Execution
               </span>
               <h3 className="text-xl font-bold text-white mt-1">{activeJob.documentName}</h3>
-              <div className="text-xs text-slate-400 mt-1">
-                {activeJob.pageCount} page(s) &bull; {activeJob.copies} copy(ies) &bull; {activeJob.paperSize}
+              <div className="text-xs text-slate-400 mt-1 font-mono">
+                {activeJob.pageCount} page(s) &bull; {activeJob.copies} copy(ies) &bull; Target: 192.168.1.37
               </div>
             </div>
             <StatusBadge status={activeJob.status} />
           </div>
 
-          {/* Interactive Stepper */}
+          {/* Stepper */}
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
             {[
               {
-                title: '1. Cloud Storage',
-                desc: 'PDF uploaded & encrypted',
+                title: '1. Uploaded',
+                desc: 'PDF uploaded',
                 active: ['UPLOADING', 'UPLOADED', 'QUEUED', 'PROCESSING', 'SENT_TO_PRINTER', 'PRINTER_ACCEPTED', 'PRINTING', 'COMPLETED'].includes(activeJob.status),
                 done: ['QUEUED', 'PROCESSING', 'SENT_TO_PRINTER', 'PRINTER_ACCEPTED', 'PRINTING', 'COMPLETED'].includes(activeJob.status),
               },
               {
-                title: '2. PCLm Conversion',
-                desc: 'Worker rendering raster',
+                title: '2. PCLm Render',
+                desc: 'Converting raster',
                 active: ['PROCESSING', 'SENT_TO_PRINTER', 'PRINTER_ACCEPTED', 'PRINTING', 'COMPLETED'].includes(activeJob.status),
                 done: ['SENT_TO_PRINTER', 'PRINTER_ACCEPTED', 'PRINTING', 'COMPLETED'].includes(activeJob.status),
               },
               {
-                title: '3. VPN to Router',
-                desc: 'Tunneling to printer IP',
+                title: '3. VPN to 192.168.1.37',
+                desc: 'Sending to IPP 631',
                 active: ['SENT_TO_PRINTER', 'PRINTER_ACCEPTED', 'PRINTING', 'COMPLETED'].includes(activeJob.status),
                 done: ['PRINTER_ACCEPTED', 'PRINTING', 'COMPLETED'].includes(activeJob.status),
               },
               {
                 title: '4. Physical Print',
-                desc: 'Job accepted by LaserJet',
+                desc: 'Printed on M126nw',
                 active: ['PRINTING', 'COMPLETED'].includes(activeJob.status),
                 done: activeJob.status === 'COMPLETED',
               },
@@ -396,14 +379,13 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onJobCreated, onNavigateHi
             ))}
           </div>
 
-          {/* Verification Box */}
           {activeJob.status === 'COMPLETED' && (
             <div className="p-4 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 flex items-center gap-3">
               <CheckCircle2 className="h-6 w-6 text-emerald-400 shrink-0" />
               <div>
                 <div className="font-bold text-sm">Physical Print Verified!</div>
                 <div className="text-xs text-emerald-300/80">
-                  {activeJob.verificationDetails?.evidence || 'Document successfully spooled and confirmed by printer hardware.'}
+                  {activeJob.verificationDetails?.evidence || 'Document printed on HP LaserJet M126nw.'}
                 </div>
               </div>
             </div>
@@ -412,11 +394,10 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onJobCreated, onNavigateHi
           {activeJob.status === 'FAILED' && (
             <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-500/40 text-rose-300">
               <div className="font-bold text-sm text-rose-400 mb-1">Print Job Failed</div>
-              <div className="text-xs font-mono">{activeJob.errorMessage || 'Unknown error occurred'}</div>
+              <div className="text-xs font-mono">{activeJob.errorMessage || 'Check printer connection'}</div>
             </div>
           )}
 
-          {/* Actions */}
           <div className="pt-4 border-t border-slate-800 flex items-center justify-between">
             <button
               onClick={resetForm}
@@ -429,7 +410,7 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onJobCreated, onNavigateHi
                 onClick={onNavigateHistory}
                 className="flex items-center gap-1.5 text-xs font-semibold text-brand-400 hover:underline"
               >
-                <span>View Full Print History</span>
+                <span>View Print History</span>
                 <ArrowRight className="h-3.5 w-3.5" />
               </button>
             )}

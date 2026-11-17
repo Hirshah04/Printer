@@ -1,151 +1,96 @@
 # Remote Wi-Fi PDF Printing System (AirPrint Hub)
 
-A production-grade, end-to-end **Remote PDF Printing System** that enables users to upload PDF documents from anywhere in the world and physically print them on a home or office printer (specifically targeted and optimized for the **HP LaserJet Pro MFP M126nw**) through a secure router-hosted VPN tunnel.
+A streamlined, production-grade **Remote PDF Printing System** engineered specifically to print to an **HP LaserJet Pro MFP M126nw** at IP `192.168.1.37` from anywhere in the world.
 
 ---
 
-## 1. System Architecture
+## 1. Simplified Architecture (No Database, No Login Required)
 
-```
-                    [ USER DEVICE ]
-              (Smartphone, Laptop, Tablet)
-                           |
-                           | 1. Uploads PDF (HTTPS)
-                           v
-            [ VERCEL WEB APPLICATION (SPA) ]
-          (React 18, Vite, TypeScript, Tailwind CSS)
-                           |
-                           | 2. Authenticated REST API
-                           v
-               [ CLOUD BACKEND API ]
-           (Node.js, Express, MongoDB Atlas,
-             Cloudflare R2 / AWS S3 Storage)
-                           |
-                           | 3. High-concurrency Print Job Queue
-                           v
-              [ CLOUD PRINT WORKER ]
-             (Runs 24/7 on Cloud VPS)
-             - Downloads PDF from S3/R2
-             - Converts PDF -> PCLm Raster
-                           |
-                           | 4. WireGuard VPN (Encrypted UDP 51820)
-                           v
-          [ WI-FI ROUTER / VPN SERVER ]
-            (Asus / OpenWrt / TP-Link / GL.iNet)
-                           |
-                           | 5. Internal Private Subnet (192.168.1.0/24)
-                           |    IPP Protocol (Port 631, /ipp/printer)
-                           v
-          [ HP LASERJET PRO MFP M126nw ]
-                           |
-                           | 6. Mechanical Print
-                           v
-              [ PHYSICAL PRINT OUTPUT ]
-```
+- **Target Printer**: HP LaserJet Pro MFP M126nw at `192.168.1.37:631/ipp/printer`.
+- **Zero Database Setup**: Uses a fast, persistent file-backed store (`data/jobs.json`). No MongoDB Atlas or external database required.
+- **Zero Authentication Overhead**: No registration or login screens. Any user opening the web URL can immediately upload and print.
+- **Exactly Two Pages**:
+  1. **Print Document**: Drag-and-drop PDF upload, page count/size inspection, copies (1-100), paper size (A4/Letter), orientation, print trigger button, and live execution stepper.
+  2. **History**: Searchable table of submitted documents, date/time, page counts, copies, status badge, full lifecycle drawer, and manual retry button.
+- **No Host PC Dependency**: Works when your personal laptop/desktop is completely switched off.
+- **Dedicated PCLm Converter**: The HP LaserJet M126nw rejects direct `application/pdf`. The cloud worker converts PDFs into standard `application/PCLm` raster via Ghostscript for crisp laser output.
+- **Secure Router VPN**: Printer port 631 is **never exposed** to the public internet. Communication occurs solely through the router's private WireGuard VPN tunnel.
 
 ---
 
-## 2. Key Architecture Principles
-
-- **Zero Host PC Dependency**: Your laptop or desktop does **NOT** need to remain running or awake. The system runs 24/7 in the cloud.
-- **No HP ePrint / No Email Printing**: Does not rely on deprecated HP ePrint or insecure email gateways.
-- **Private & Secure IPP**: The printer's IPP port `631` is **never exposed** to the public internet. Communication occurs solely through the router's private WireGuard VPN tunnel.
-- **Dedicated PCLm Converter Engine**: The HP LaserJet Pro MFP M126nw rejects direct `application/pdf`. The cloud worker converts PDFs into standard `application/PCLm` (using native Ghostscript rasterization) at 300 DPI for crisp laser output.
-- **Wi-Fi Direct Disambiguation**: Intelligently detects and warns against using `192.168.223.1` (the printer's peer-to-peer SoftAP IP) and guides users to assign a router LAN IP (e.g. `192.168.1.150`).
-- **Verified Completion Status**: Tracks IPP job attributes until the printer reports physical completion. If the printer hardware does not support terminal job query, the system reports `"Printer accepted job; completion not confirmed"` to avoid false success.
-
----
-
-## 3. Project Structure
+## 2. System Flow
 
 ```
-Printer/
-├── backend/                  # Node.js + Express + TypeScript Backend API
-│   ├── src/
-│   │   ├── config/          # Environment, MongoDB, and Storage configuration
-│   │   ├── controllers/     # Auth, Printers, Jobs, Workers, Network, Admin
-│   │   ├── middleware/      # JWT Auth, Multer PDF Upload, Rate Limit, Errors
-│   │   ├── models/          # User, Printer, PrintJob, Worker, SystemLog, NetworkConfig
-│   │   ├── routes/          # Express route definitions
-│   │   ├── services/        # IPP, PDF inspection, Storage (S3/R2/local), Queue
-│   │   └── index.ts         # Server entry point
-│   ├── .env.example
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── Dockerfile
-├── worker/                   # Standalone Cloud Print Worker Service
-│   ├── src/
-│   │   ├── config/          # Worker configuration
-│   │   ├── converter/       # PDF to PCLm / raster converter (Ghostscript)
-│   │   ├── ipp/             # IPP client, status poller, job submitter
-│   │   ├── vpn/             # WireGuard / OpenVPN health monitor
-│   │   ├── queue/           # Job consumer (BullMQ / REST polling fallback)
-│   │   └── index.ts         # Worker daemon entry point
-│   ├── wireguard/           # Sample WireGuard client configurations
-│   ├── .env.example
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── Dockerfile           # Multi-stage with WireGuard tools and Ghostscript
-├── frontend/                 # React 18 + Vite + TypeScript + Tailwind CSS
-│   ├── src/
-│   │   ├── components/      # UI components (Navbar, Modal, StatusBadge, etc.)
-│   │   ├── context/         # AuthContext
-│   │   ├── pages/           # Dashboard, Print, History, Admin, NetworkSetup
-│   │   ├── services/        # Axios API client
-│   │   └── types/           # TypeScript interfaces
-│   ├── .env.example
-│   ├── package.json
-│   └── vite.config.ts
-├── docs/                     # Deep Architectural Documentation
-│   ├── ROUTER_VPN_SETUP.md  # Detailed router setup (WireGuard, DDNS, Asus, OpenWrt)
-│   ├── HP_M126NW_GUIDE.md    # IPP, PCLm, Wi-Fi Direct vs LAN IP diagnostic
-│   ├── DEPLOYMENT_GUIDE.md  # Vercel, Cloud Worker (VPS/Docker), S3/R2, MongoDB
-│   └── API_DOCUMENTATION.md # Complete REST API reference
-├── docker-compose.yml        # Multi-service local orchestrator
-└── README.md
+                      [ ANY USER DEVICE ]
+                 (Mobile Phone, Tablet, Laptop)
+                              |
+                              | 1. Uploads PDF (HTTPS)
+                              v
+               [ VERCEL WEB APPLICATION (SPA) ]
+             (React 18, Vite, TypeScript, Tailwind CSS)
+             - Page 1: Print Document
+             - Page 2: History
+                              |
+                              | 2. REST API (No Auth Wall)
+                              v
+                  [ CLOUD BACKEND API ]
+              (Node.js, Express, File-backed JSON Store)
+                              |
+                              | 3. Print Job Queue
+                              v
+                 [ CLOUD PRINT WORKER ]
+             (Runs 24/7 on Cloud VPS / Docker)
+             - Downloads PDF
+             - Converts PDF -> PCLm Raster (300 DPI)
+                              |
+                              | 4. WireGuard VPN (Encrypted UDP 51820)
+                              v
+             [ WI-FI ROUTER / VPN SERVER ]
+                              |
+                              | 5. Internal LAN: 192.168.1.37:631
+                              |    IPP Protocol (/ipp/printer)
+                              v
+             [ HP LASERJET PRO MFP M126nw ]
+                              |
+                              | 6. Mechanical Output
+                              v
+                 [ PHYSICAL PRINTED SHEET ]
 ```
 
 ---
 
-## 4. Quick Start (Local Development)
+## 3. Quick Start (Local Run)
 
-### Prerequisites
-- Node.js 18+ or 20+
-- npm 9+
-- (Optional) Ghostscript for local PCLm conversion (`choco install ghostscript` on Windows or `apt install ghostscript` on Linux)
-- (Optional) Docker for full stack compose
-
-### 1. Backend Setup
+### 1. Start Cloud Backend API
 ```bash
 cd backend
-cp .env.example .env
 npm install
-npm run dev
+npm run build
+npm start
 ```
-Backend API will start on `http://localhost:5000`.
+The API starts on `http://localhost:5000` with the target printer preset to `192.168.1.37`.
 
-### 2. Frontend Setup
+### 2. Start Frontend Web App
 ```bash
 cd frontend
-cp .env.example .env
 npm install
 npm run dev
 ```
-Frontend will be accessible at `http://localhost:5173`.
+Open `http://localhost:5173`. You will see the **Print Document** page immediately with live status for `192.168.1.37`.
 
-### 3. Worker Setup
+### 3. Start Cloud Print Worker
 ```bash
 cd worker
-cp .env.example .env
 npm install
-npm run dev
+npm run build
+npm start
 ```
 
 ---
 
-## 5. Docker Orchestration
+## 4. Docker Orchestration
 
-You can spin up the whole ecosystem (MongoDB, Backend, Worker, and Frontend) with:
+Run the entire stack with Docker Compose:
 
 ```bash
 docker-compose up --build
@@ -153,15 +98,11 @@ docker-compose up --build
 
 ---
 
-## 6. The Final Acceptance Test Checklist
+## 5. Verification Checklist
 
-The project is considered fully validated when this test is carried out:
-
-1. **Printer Connected**: The HP LaserJet Pro MFP M126nw is turned on and connected to your home router Wi-Fi with a reserved LAN IP (e.g., `192.168.1.150`).
-2. **Cloud Worker Running**: The Cloud Print Worker container is running on a cloud VPS with its WireGuard interface `wg0` active.
-3. **Laptop Switched OFF**: Your personal laptop/desktop is completely powered down.
-4. **Different Network**: You connect your phone or remote device to cellular 4G/5G or a completely separate Wi-Fi network.
-5. **Web Portal**: Open the deployed Vercel web URL.
-6. **Upload & Print**: Select an A4 PDF document and click **Print Document Now**.
-7. **Execution**: The Cloud Worker retrieves the job, converts it to PCLm, routes it through the WireGuard VPN to `192.168.1.150:631`, and the printer physically prints the document.
-8. **Status Verified**: The web portal displays the verified `COMPLETED` status with evidence from printer telemetry.
+1. **Printer Ready**: HP LaserJet M126nw is turned on and assigned `192.168.1.37` on your router Wi-Fi.
+2. **Cloud Worker Active**: Worker is running on your VPS with WireGuard connected to your router.
+3. **Laptop Powered OFF**: Switch off your personal computer completely.
+4. **Mobile Phone on 4G/5G**: Open the Vercel web URL on your phone browser.
+5. **Print**: Upload a PDF and click **Print Document Now**.
+6. **Result**: Cloud worker renders PCLm, tunnels to `192.168.1.37:631`, and the printer physically prints your document!

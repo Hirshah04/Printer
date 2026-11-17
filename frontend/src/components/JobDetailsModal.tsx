@@ -23,8 +23,6 @@ export const JobDetailsModal: React.FC<JobDetailsModalProps> = ({
 
   if (!job) return null;
 
-  const printer = typeof job.printerId === 'object' ? job.printerId : null;
-
   const handleRetry = async () => {
     setLoading(true);
     setActionError('');
@@ -89,8 +87,8 @@ export const JobDetailsModal: React.FC<JobDetailsModalProps> = ({
             <Printer className="h-4 w-4 text-slate-400" />
             <div>
               <div className="text-xs text-slate-400">Target Printer</div>
-              <div className="font-medium text-white">{printer ? printer.name : 'Configured Printer'}</div>
-              {printer && <div className="text-[11px] text-slate-400 font-mono">{printer.lanIp}</div>}
+              <div className="font-medium text-white">HP LaserJet Pro MFP M126nw</div>
+              <div className="text-[11px] text-brand-300 font-mono">192.168.1.37:631</div>
             </div>
           </div>
           <div className="p-3 rounded-lg bg-slate-800/40 border border-slate-700/40 flex items-center gap-2.5">
@@ -99,7 +97,7 @@ export const JobDetailsModal: React.FC<JobDetailsModalProps> = ({
               <div className="text-xs text-slate-400">Submitted At</div>
               <div className="font-medium text-white">{new Date(job.createdAt).toLocaleString()}</div>
               {job.printerJobId && (
-                <div className="text-[11px] text-cyan-400 font-mono">IPP ID: #{job.printerJobId}</div>
+                <div className="text-[11px] text-cyan-400 font-mono">IPP Job ID: #{job.printerJobId}</div>
               )}
             </div>
           </div>
@@ -115,7 +113,7 @@ export const JobDetailsModal: React.FC<JobDetailsModalProps> = ({
           </div>
         )}
 
-        {/* Physical Completion Verification Evidence (Section 10 requirement) */}
+        {/* Physical Completion Verification Evidence */}
         {job.verificationDetails?.evidence && (
           <div className="p-3.5 rounded-lg bg-emerald-950/30 border border-emerald-500/30 text-emerald-300">
             <div className="font-semibold text-xs uppercase tracking-wider text-emerald-400 mb-1 flex items-center gap-1.5">
@@ -133,7 +131,7 @@ export const JobDetailsModal: React.FC<JobDetailsModalProps> = ({
         {/* Status History Timeline */}
         <div>
           <h5 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">
-            Lifecycle & Progress Timeline
+            Lifecycle Progress
           </h5>
           <div className="relative pl-6 space-y-4 border-l border-slate-700/80 ml-2">
             {job.statusHistory.map((item, idx) => (

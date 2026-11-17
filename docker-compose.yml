@@ -1,19 +1,7 @@
 version: '3.8'
 
 services:
-  # MongoDB Atlas alternative for local self-hosting / offline development
-  mongodb:
-    image: mongo:7.0
-    container_name: printer-mongodb
-    restart: unless-stopped
-    ports:
-      - "27017:27017"
-    environment:
-      MONGO_INITDB_DATABASE: remote_printer_hub
-    volumes:
-      - mongo_data:/data/db
-
-  # Cloud Backend API
+  # Cloud Backend API (File-backed storage, no database required)
   backend:
     build:
       context: ./backend
@@ -25,17 +13,17 @@ services:
     environment:
       PORT: 5000
       NODE_ENV: production
-      MONGODB_URI: mongodb://mongodb:27017/remote_printer_hub
-      JWT_SECRET: dev_super_secret_jwt_key_replace_for_production_env_123456789
+      PRINTER_IP: "192.168.1.37"
+      PRINTER_PORT: 631
+      PRINTER_ENDPOINT: "/ipp/printer"
       WORKER_API_KEY: worker-secret-token-change-this-to-a-high-entropy-random-string
       STORAGE_TYPE: local
       CORS_ORIGIN: "*"
-    depends_on:
-      - mongodb
     volumes:
+      - backend_data:/app/data
       - backend_uploads:/app/uploads
 
-  # Cloud Print Worker Daemon (maintains WireGuard VPN to Router)
+  # Cloud Print Worker Daemon (WireGuard VPN Tunnel to Router -> 192.168.1.37)
   worker:
     build:
       context: ./worker
@@ -49,16 +37,15 @@ services:
       BACKEND_URL: http://backend:5000
       WORKER_API_KEY: worker-secret-token-change-this-to-a-high-entropy-random-string
       WORKER_ID: cloud-print-worker-docker-1
-      DEFAULT_PRINTER_IP: 192.168.1.150
+      DEFAULT_PRINTER_IP: "192.168.1.37"
       GATEWAY_IP: 10.14.0.1
       WIREGUARD_INTERFACE: wg0
     depends_on:
       - backend
     volumes:
-      # Mount your router-exported client WireGuard configuration
       - ./worker/wireguard/wg0.conf:/etc/wireguard/wg0.conf:ro
 
-  # Frontend Web Application (Development / Production Preview)
+  # Frontend Web Application (Two Pages: Print Document & History)
   frontend:
     image: node:20-alpine
     container_name: printer-frontend
@@ -74,5 +61,5 @@ services:
       - backend
 
 volumes:
-  mongo_data:
+  backend_data:
   backend_uploads:
