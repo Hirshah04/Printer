@@ -1,36 +1,24 @@
 import sys
 import os
+import zlib
 import fitz # PyMuPDF
 
-def encode_rle(data: bytes) -> bytes:
-    i = 0
-    n = len(data)
-    out = bytearray()
-    while i < n:
-        # Check for run of identical bytes
-        run_len = 1
-        while i + run_len < n and run_len < 128 and data[i + run_len] == data[i]:
-            run_len += 1
-        if run_len >= 3:
-            out.append(257 - run_len)
-            out.append(data[i])
-            i += run_len
-        else:
-            lit_start = i
-            while i < n and (i - lit_start) < 128:
-                if i + 2 < n and data[i] == data[i+1] == data[i+2]:
-                    break
-                i += 1
-            lit_len = i - lit_start
-            out.append(lit_len - 1)
-            out.extend(data[lit_start:i])
-    out.append(128) # PDF RunLengthDecode EOD marker
-    return bytes(out)
-
-def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128):
+def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_size='A4'):
     doc = fitz.open(pdf_path)
     points_per_inch = 72.0
     scale = points_per_inch / dpi
+
+    # Exact physical dimensions at 600 DPI
+    if paper_size.upper() == 'LETTER':
+        target_w = int(round(8.5 * dpi))   # 5100
+        target_h = int(round(11.0 * dpi))  # 6600
+        width_points = 612
+        height_points = 792
+    else: # Default A4
+        target_w = 4960
+        target_h = 7016
+        width_points = 595
+        height_points = 842
 
     objects = {}
     next_obj_num = 1
@@ -48,32 +36,53 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128):
 
     for page_idx in range(len(doc)):
         page = doc[page_idx]
-        
-        # Render at exact 600 DPI in 8-bit grayscale (DeviceGray)
-        pix = page.get_pixmap(dpi=dpi, colorspace=fitz.csGRAY)
-        
-        width = pix.width
-        height = pix.height
-        
-        # Integral points for MediaBox
-        width_points = int(round(width * scale))
-        height_points = int(round(height * scale))
-        
+
+        # Auto-rotate landscape documents so they fit the printer's portrait paper feed
+        if page.rect.width > page.rect.height:
+            page.set_rotation((page.rotation + 90) % 360)
+
+        # Scale page to fit cleanly within the target page boundaries with a 2% printable margin
+        margin_factor = 0.96
+        usable_w = target_w * margin_factor
+        usable_h = target_h * margin_factor
+
+        zoom_x = usable_w / (page.rect.width * (dpi / points_per_inch))
+        zoom_y = usable_h / (page.rect.height * (dpi / points_per_inch))
+        zoom = min(zoom_x, zoom_y, 1.0) # Do not upscale beyond 100%
+
+        mat = fitz.Matrix(zoom * (dpi / points_per_inch), zoom * (dpi / points_per_inch))
+        rendered_pix = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
+
+        # Create full exact target page canvas (pure white)
+        canvas = fitz.Pixmap(fitz.csGRAY, fitz.IRect(0, 0, target_w, target_h), 0)
+        canvas.clear_with(255) # 255 = White
+
+        # Center the rendered page on the sheet
+        ox = max(0, (target_w - rendered_pix.width) // 2)
+        oy = max(0, (target_h - rendered_pix.height) // 2)
+
+        # Copy pixels into centered position
+        cw = min(rendered_pix.width, target_w - ox)
+        ch = min(rendered_pix.height, target_h - oy)
+        canvas.copy(rendered_pix, fitz.IRect(ox, oy, ox + cw, oy + ch))
+
+        width = target_w
+        height = target_h
+        raw_samples = canvas.samples
+        row_stride = width
+
         page_obj_num = alloc_obj()
         content_obj_num = alloc_obj()
-        
+
         # Split into swaths of exact strip_height (128 rows)
         swaths = []
-        raw_samples = pix.samples
-        row_stride = width
-        
         y = 0
         swath_idx = 0
         while y < height:
             curr_strip_h = min(strip_height, height - y)
             strip_bytes = raw_samples[y * row_stride : (y + curr_strip_h) * row_stride]
-            compressed = encode_rle(strip_bytes)
-            
+            compressed = zlib.compress(strip_bytes, level=6)
+
             xobject_num = alloc_obj()
             swaths.append({
                 'idx': swath_idx,
@@ -83,7 +92,7 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128):
                 'data': compressed,
                 'width': width
             })
-            
+
             y += curr_strip_h
             swath_idx += 1
 
@@ -131,29 +140,28 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128):
         # 4. Write Pages, Contents, and Swath XObjects
         for p in page_records:
             write_obj_header(p['page_obj_num'])
-            xobjects_dict = " ".join([f"/res{s['idx']} {s['xobject_num']} 0 R" for s in p['swaths']])
+            xobjects_dict = " ".join([f"/Image{s['idx']} {s['xobject_num']} 0 R" for s in p['swaths']])
             write_str(
                 f"<<\n/Type /Page\n"
                 f"/Parent {pages_num} 0 R\n"
-                f"/MediaBox [ 0 0 {p['width_points']} {p['height_points']} ]\n"
                 f"/Resources << /XObject << {xobjects_dict} >> >>\n"
-                f"/Contents [ {p['content_obj_num']} 0 R ]\n"
-                f"/PCLmPageStripHeight {strip_height}\n"
-                f"/PCLmPageStripType /RunLengthDecode\n>>\n"
+                f"/MediaBox [ 0 0 {p['width_points']} {p['height_points']} ]\n"
+                f"/Contents [ {p['content_obj_num']} 0 R ]\n>>\n"
             )
             write_obj_footer()
 
-            # Content Stream
+            # Content Stream with clean standard PDF operators matching Windows PCLm spec
             scale_str = f"{p['scale']:.6f}"
             cs_parts = []
             cs_parts.append(f"{scale_str} 0 0 {scale_str} 0 0 cm\n")
-            
+
             for s in p['swaths']:
                 page_y_offset = p['height_pixels'] - s['y_offset'] - s['height']
-                cs_parts.append("/P <</MCID 0>> BDC q\n")
+                cs_parts.append("q\n")
                 cs_parts.append(f"{p['width_pixels']} 0 0 {s['height']} 0 {page_y_offset} cm\n")
-                cs_parts.append(f"/res{s['idx']} Do Q\n")
-                
+                cs_parts.append(f"/Image{s['idx']} Do\n")
+                cs_parts.append("Q\n")
+
             content_bytes = "".join(cs_parts).encode('ascii')
 
             write_obj_header(p['content_obj_num'])
@@ -162,7 +170,7 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128):
             write_str("\nendstream\n")
             write_obj_footer()
 
-            # Swath XObjects with RunLengthDecode filter
+            # Swath XObjects with FlateDecode filter (HP PCLm standard)
             for s in p['swaths']:
                 write_obj_header(s['xobject_num'])
                 write_str(
@@ -172,8 +180,9 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128):
                     f"/Height {s['height']}\n"
                     f"/ColorSpace /DeviceGray\n"
                     f"/BitsPerComponent 8\n"
-                    f"/Filter /RunLengthDecode\n"
-                    f"/Length {len(s['data'])}\n>>\nstream\n"
+                    f"/Filter /FlateDecode\n"
+                    f"/Length {len(s['data'])}\n"
+                    f"/Name /ColorStrip\n>>\nstream\n"
                 )
                 write_bytes(s['data'])
                 write_str("\nendstream\n")
@@ -194,10 +203,11 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128):
             f"startxref\n{xref_offset}\n%%EOF\n"
         )
 
-    print(f"PCLm 600 DPI RLE generated: {output_pclm_path} ({os.path.getsize(output_pclm_path)} bytes)")
+    print(f"PCLm 600 DPI ({paper_size}) generated: {output_pclm_path} ({os.path.getsize(output_pclm_path)} bytes)")
 
 if __name__ == '__main__':
     pdf = sys.argv[1]
     out = sys.argv[2]
     dpi = int(sys.argv[3]) if len(sys.argv) > 3 else 600
-    generate_pclm(pdf, out, dpi=dpi)
+    paper = sys.argv[4] if len(sys.argv) > 4 else 'A4'
+    generate_pclm(pdf, out, dpi=dpi, paper_size=paper)

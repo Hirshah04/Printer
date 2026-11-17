@@ -150,17 +150,17 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_s
             )
             write_obj_footer()
 
-            # Content Stream following HP official jipp PclmWriter spec
+            # Content Stream with clean standard PDF operators matching Windows PCLm spec
             scale_str = f"{p['scale']:.6f}"
             cs_parts = []
             cs_parts.append(f"{scale_str} 0 0 {scale_str} 0 0 cm\n")
-            cs_parts.append("/P <</MCID 0>> BDC q\n")
 
             for s in p['swaths']:
                 page_y_offset = p['height_pixels'] - s['y_offset'] - s['height']
+                cs_parts.append("q\n")
                 cs_parts.append(f"{p['width_pixels']} 0 0 {s['height']} 0 {page_y_offset} cm\n")
-                cs_parts.append(f"/Image{s['idx']} Do Q\n")
-                cs_parts.append("/P <</MCID 0>> BDC q\n")
+                cs_parts.append(f"/Image{s['idx']} Do\n")
+                cs_parts.append("Q\n")
 
             content_bytes = "".join(cs_parts).encode('ascii')
 
