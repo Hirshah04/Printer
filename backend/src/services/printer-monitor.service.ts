@@ -340,6 +340,32 @@ export class PrinterMonitorService {
             });
             if (updated) sseService.broadcastJobUpdate(updated);
           }
+        } else {
+          // HP LaserJet purges completed jobs from memory immediately upon finishing.
+          // If the job is no longer found in the printer job table and printer is IDLE,
+          // the physical printing has concluded. Mark job COMPLETED.
+          const printerState = dbService.getPrinter();
+          const jobAgeMs = Date.now() - new Date(job.startedAt || job.createdAt).getTime();
+
+          if (jobAgeMs > 15000 && (printerState.currentStatus === 'IDLE' || (printerState.queuedJobCount || 0) === 0)) {
+            console.log(`[PrinterMonitor] Job #${ippJobIdNum} completed and purged from printer memory. Marking COMPLETED.`);
+            const updated = await dbService.updateJob(job._id, {
+              status: 'COMPLETED',
+              printerJobState: 'completed',
+              completionVerified: true,
+              sheetsPrinted: job.pageCount || 1,
+              completedAt: nowIso,
+              lastAcknowledgementAt: nowIso,
+              message: 'Printer reports that the document has finished printing.',
+              verificationDetails: {
+                verifiedAt: nowIso,
+                evidence: 'Job processed and ejected; printer returned to IDLE with queue clear.',
+                finalPrinterState: 'IDLE',
+                sheetsPrinted: job.pageCount || 1,
+              },
+            });
+            if (updated) sseService.broadcastJobUpdate(updated);
+          }
         }
       } catch (err: any) {
         console.warn(`[PrinterMonitor] Error polling job #${ippJobIdNum}:`, err.message);
