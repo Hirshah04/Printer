@@ -77,7 +77,13 @@ export class DispatcherService {
 
       const ippPrinter = ipp.Printer(printerUri);
       const media = job.paperSize === 'Letter' ? 'na_letter_8.5x11in' : 'iso_a4_210x297mm';
-      const orientationValue = job.orientation === 'LANDSCAPE' ? 4 : 3;
+
+      const isIppSuccess = (status: any, res?: any) => {
+        if (status === 0 || status === 'successful-ok') return true;
+        if (typeof status === 'string' && status.toLowerCase().includes('success')) return true;
+        if (res?.['job-attributes-tag']?.['job-id']) return true;
+        return false;
+      };
 
       let printerJobId = '';
 
@@ -94,8 +100,7 @@ export class DispatcherService {
           'job-attributes-tag': {
             copies: job.copies || 1,
             media,
-            'sides': 'one-sided',
-            'orientation-requested': orientationValue,
+            'print-color-mode': 'monochrome',
           },
           data: pageBuffer,
         };
@@ -107,56 +112,50 @@ export class DispatcherService {
           });
         });
 
-        if (submitRes.statusCode !== 'successful-ok' && submitRes.statusCode !== 0) {
-          throw new Error(`Printer rejected job with status: ${submitRes.statusCode}`);
+        if (!isIppSuccess(submitRes?.statusCode, submitRes)) {
+          throw new Error(`Printer rejected job with status: ${submitRes?.statusCode || 'unknown'}`);
         }
 
         printerJobId = String(submitRes['job-attributes-tag']?.['job-id'] || '');
       } else {
-        // Multi-page: Submit via Create-Job + Send-Document per page
-        const createMsg: any = {
-          'operation-attributes-tag': {
-            'requesting-user-name': 'AirPrintHub',
-            'job-name': job.documentName,
-          },
-          'job-attributes-tag': {
-            copies: job.copies || 1,
-            media,
-            'sides': 'one-sided',
-            'orientation-requested': orientationValue,
-          },
-        };
-
-        const createRes: any = await new Promise((resolve, reject) => {
-          ippPrinter.execute('Create-Job', createMsg, (err: any, res: any) => {
-            if (err) reject(err);
-            else resolve(res);
-          });
-        });
-
-        printerJobId = String(createRes['job-attributes-tag']?.['job-id'] || '');
-
+        // Multi-page: Submit each page sequentially via Print-Job
+        // HP M126nw has multiple-document-jobs-supported = false, so each page is submitted as a distinct print job
         for (let i = 0; i < pages.length; i++) {
-          const isLast = i === pages.length - 1;
           const pageBuffer = await fs.promises.readFile(pages[i].file);
+          const pageJobName = `${job.documentName} (Page ${i + 1}/${pages.length})`;
 
-          const sendMsg: any = {
+          const printMsg: any = {
             'operation-attributes-tag': {
               'requesting-user-name': 'AirPrintHub',
-              'job-id': parseInt(printerJobId, 10),
+              'job-name': pageJobName,
               'document-format': 'image/jpeg',
-              'last-document': isLast,
+            },
+            'job-attributes-tag': {
+              copies: job.copies || 1,
+              media,
+              'print-color-mode': 'monochrome',
             },
             data: pageBuffer,
           };
 
-          await new Promise((resolve, reject) => {
-            ippPrinter.execute('Send-Document', sendMsg, (err: any, res: any) => {
+          const submitRes: any = await new Promise((resolve, reject) => {
+            ippPrinter.execute('Print-Job', printMsg, (err: any, res: any) => {
               if (err) reject(err);
               else resolve(res);
             });
           });
-          console.log(`[Dispatcher] Sent page ${i + 1}/${pages.length} to printer job #${printerJobId}`);
+
+          if (!isIppSuccess(submitRes?.statusCode, submitRes)) {
+            throw new Error(`Printer rejected page ${i + 1} with status: ${submitRes?.statusCode || 'unknown'}`);
+          }
+
+          const pageJobId = String(submitRes['job-attributes-tag']?.['job-id'] || '');
+          if (!printerJobId) printerJobId = pageJobId;
+          console.log(`[Dispatcher] Page ${i + 1}/${pages.length} accepted by printer as Job #${pageJobId}`);
+
+          if (i < pages.length - 1) {
+            await new Promise((r) => setTimeout(r, 1000));
+          }
         }
       }
 

@@ -43,7 +43,6 @@ export class IPPClient {
         const printer = ipp.Printer(printerUri);
 
         const media = options.paperSize === 'Letter' ? 'na_letter_8.5x11in' : 'iso_a4_210x297mm';
-        const orientationValue = options.orientation === 'LANDSCAPE' ? 4 : 3;
 
         const msg: any = {
           'operation-attributes-tag': {
@@ -54,8 +53,7 @@ export class IPPClient {
           'job-attributes-tag': {
             copies: options.copies || 1,
             media,
-            'sides': 'one-sided',
-            'orientation-requested': orientationValue,
+            'print-color-mode': 'monochrome',
           },
           data: documentBuffer,
         };
