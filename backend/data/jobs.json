@@ -19,15 +19,126 @@
     "stateReasons": [
       "none"
     ],
-    "queuedJobCount": 2,
+    "queuedJobCount": 1,
     "consecutiveFailureCount": 0,
     "monitoringEnabled": true,
-    "lastSeenAt": "2026-11-17T07:27:20.539Z",
-    "lastAcknowledgementAt": "2026-11-17T07:27:19.450Z",
-    "lastSuccessfulAcknowledgementAt": "2026-11-17T07:27:19.450Z",
-    "nextCheckAt": "2026-11-17T07:27:29.450Z"
+    "lastSeenAt": "2026-11-17T08:03:42.634Z",
+    "lastAcknowledgementAt": "2026-11-17T08:03:41.634Z",
+    "lastSuccessfulAcknowledgementAt": "2026-11-17T08:03:41.634Z",
+    "nextCheckAt": "2026-11-17T08:03:51.633Z"
   },
   "jobs": [
+    {
+      "documentName": "Blockchain.pdf",
+      "storageKey": "1794902602420-v7zstm1-Blockchain.pdf",
+      "storageUrl": "/api/jobs/download/1794902602420-v7zstm1-Blockchain.pdf",
+      "fileSizeBytes": 424917,
+      "pageCount": 1,
+      "copies": 1,
+      "paperSize": "A4",
+      "orientation": "PORTRAIT",
+      "status": "PRINTING",
+      "statusHistory": [
+        {
+          "status": "QUEUED",
+          "timestamp": "2026-11-17T08:03:22.430Z",
+          "message": "Document queued for printing on HP LaserJet M126nw (192.168.1.37)"
+        },
+        {
+          "status": "PROCESSING",
+          "timestamp": "2026-11-17T08:03:22.442Z",
+          "message": "Converting document to native HP LaserJet PCLm raster format at 600 DPI..."
+        },
+        {
+          "status": "SENT_TO_PRINTER",
+          "timestamp": "2026-11-17T08:03:41.853Z",
+          "message": "Transmitting PCLm data to printer at 192.168.1.37:631..."
+        },
+        {
+          "status": "PRINTER_ACCEPTED",
+          "timestamp": "2026-11-17T08:03:45.650Z",
+          "message": "Accepted by HP LaserJet M126nw (IPP Job #426)"
+        },
+        {
+          "status": "PRINTING",
+          "timestamp": "2026-11-17T08:03:45.652Z",
+          "message": "Printer is physically processing and printing document..."
+        }
+      ],
+      "_id": "job-1794902602431-pho74",
+      "completionVerified": false,
+      "submittedAt": "2026-11-17T08:03:22.431Z",
+      "retryCount": 0,
+      "maxRetries": 3,
+      "createdAt": "2026-11-17T08:03:22.431Z",
+      "updatedAt": "2026-11-17T08:03:45.652Z",
+      "printerJobId": "426",
+      "printerIPPJobId": "426",
+      "lastAcknowledgementAt": "2026-11-17T08:03:45.650Z",
+      "startedAt": "2026-11-17T08:03:45.652Z",
+      "printerJobState": "processing"
+    },
+    {
+      "documentName": "Data Analytics.pdf",
+      "storageKey": "1794901822289-p52fo9v-Data_Analytics.pdf",
+      "storageUrl": "/api/jobs/download/1794901822289-p52fo9v-Data_Analytics.pdf",
+      "fileSizeBytes": 325552,
+      "pageCount": 1,
+      "copies": 1,
+      "paperSize": "A4",
+      "orientation": "PORTRAIT",
+      "status": "COMPLETED",
+      "statusHistory": [
+        {
+          "status": "QUEUED",
+          "timestamp": "2026-11-17T07:50:22.300Z",
+          "message": "Document queued for printing on HP LaserJet M126nw (192.168.1.37)"
+        },
+        {
+          "status": "PROCESSING",
+          "timestamp": "2026-11-17T07:50:22.315Z",
+          "message": "Converting document to native HP LaserJet PCLm raster format at 600 DPI..."
+        },
+        {
+          "status": "SENT_TO_PRINTER",
+          "timestamp": "2026-11-17T07:50:53.202Z",
+          "message": "Transmitting PCLm data to printer at 192.168.1.37:631..."
+        },
+        {
+          "status": "PRINTER_ACCEPTED",
+          "timestamp": "2026-11-17T07:50:56.212Z",
+          "message": "Accepted by HP LaserJet M126nw (IPP Job #425)"
+        },
+        {
+          "status": "PRINTING",
+          "timestamp": "2026-11-17T07:50:56.214Z",
+          "message": "Printer is physically processing and printing document..."
+        },
+        {
+          "status": "COMPLETED",
+          "timestamp": "2026-11-17T07:51:57.238Z",
+          "message": "Printer accepted job; completion not confirmed by telemetry."
+        }
+      ],
+      "_id": "job-1794901822301-x71jq",
+      "completionVerified": false,
+      "submittedAt": "2026-11-17T07:50:22.300Z",
+      "retryCount": 0,
+      "maxRetries": 3,
+      "createdAt": "2026-11-17T07:50:22.300Z",
+      "updatedAt": "2026-11-17T07:51:57.238Z",
+      "printerJobId": "425",
+      "printerIPPJobId": "425",
+      "lastAcknowledgementAt": "2026-11-17T07:51:57.237Z",
+      "startedAt": "2026-11-17T07:50:56.214Z",
+      "printerJobState": "processing",
+      "completedAt": "2026-11-17T07:51:57.238Z",
+      "verificationDetails": {
+        "verifiedAt": "2026-11-17T07:51:57.237Z",
+        "evidence": "Job #425 was spooled to HP LaserJet M126nw. Physical output not verified by telemetry.",
+        "finalPrinterState": "IDLE"
+      }
+    },
     {
       "documentName": "GenAI.pdf",
       "storageKey": "1794899916608-w2ote1d-GenAI.pdf",
@@ -535,5 +646,5 @@
       "message": "Document physically printed on HP LaserJet M126nw"
     }
   ],
-  "lastSaved": "2026-11-17T07:27:20.539Z"
+  "lastSaved": "2026-11-17T08:03:45.652Z"
 }

@@ -61,8 +61,11 @@ export class DispatcherService {
       await fs.promises.writeFile(tempPdf, pdfBuffer);
 
       // 3. Convert PDF to native HP LaserJet PCLm 600 DPI stream using PyMuPDF PCLm generator
-      const scriptPath = path.resolve(process.cwd(), 'src/scripts/pdf_to_pclm.py');
-      const cmd = `python "${scriptPath}" "${tempPdf}" "${tempPclm}" 600`;
+      const pyBin = process.platform === 'win32' ? 'python' : 'python3';
+      const scriptPath = fs.existsSync(path.resolve(process.cwd(), 'dist/scripts/pdf_to_pclm.py'))
+        ? path.resolve(process.cwd(), 'dist/scripts/pdf_to_pclm.py')
+        : path.resolve(process.cwd(), 'src/scripts/pdf_to_pclm.py');
+      const cmd = `"${pyBin}" "${scriptPath}" "${tempPdf}" "${tempPclm}" 600`;
 
       await execAsync(cmd);
 

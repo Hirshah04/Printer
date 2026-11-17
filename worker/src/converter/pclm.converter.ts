@@ -66,8 +66,11 @@ export class PCLmConverter {
 
       await fs.promises.writeFile(inputPdfPath, pdfBuffer);
 
-      const scriptPath = path.resolve(process.cwd(), 'src/scripts/pdf_to_pclm.py');
-      const cmd = `python "${scriptPath}" "${inputPdfPath}" "${outputPclmPath}"`;
+      const pyBin = process.platform === 'win32' ? 'python' : 'python3';
+      const scriptPath = fs.existsSync(path.resolve(process.cwd(), 'dist/scripts/pdf_to_pclm.py'))
+        ? path.resolve(process.cwd(), 'dist/scripts/pdf_to_pclm.py')
+        : path.resolve(process.cwd(), 'src/scripts/pdf_to_pclm.py');
+      const cmd = `"${pyBin}" "${scriptPath}" "${inputPdfPath}" "${outputPclmPath}" 600`;
 
       await execAsync(cmd);
 
