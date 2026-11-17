@@ -100,12 +100,12 @@ export class JobConsumer {
       const pdfBuffer = Buffer.from(downloadRes.data);
       await fs.promises.writeFile(tempPdf, pdfBuffer);
 
-      // 2. Convert PDF to native HP LaserJet PCLm stream using PyMuPDF PCLm generator
-      await this.updateStatus(jobId, 'PROCESSING', 'Converting document to HP PCLm raster stream at 300 DPI...');
+      // 2. Convert PDF to native HP LaserJet PCLm stream at 600 DPI (supported hardware resolution)
+      await this.updateStatus(jobId, 'PROCESSING', 'Converting document to HP PCLm raster stream at 600 DPI...');
 
       const conversion = await pclmConverter.convertPdfToPclm(pdfBuffer, {
         paperSize: job.paperSize || 'A4',
-        resolutionDpi: 300,
+        resolutionDpi: 600,
       });
 
       const targetLanIp = printer?.lanIp || config.defaultPrinterIp;

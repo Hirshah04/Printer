@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Printer as PrinterIcon, FileUp, History, RefreshCw, CheckCircle2, AlertOctagon } from 'lucide-react';
+import { Printer as PrinterIcon, FileUp, History, RefreshCw, Radio } from 'lucide-react';
 import { printerService } from '../services/api';
-import { Printer } from '../types';
+import { realtimeClient } from '../services/realtime';
+import { Printer, PrinterOperationalStatus } from '../types';
 
 interface NavbarProps {
   currentTab: 'print' | 'history';
@@ -10,36 +11,64 @@ interface NavbarProps {
 
 export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab }) => {
   const [printer, setPrinter] = useState<Printer | null>(null);
-  const [testing, setTesting] = useState(false);
-
-  const fetchPrinterStatus = async () => {
-    try {
-      const data = await printerService.getPrinter();
-      setPrinter(data);
-    } catch {
-      // Ignored
-    }
-  };
+  const [checking, setChecking] = useState(false);
 
   useEffect(() => {
-    fetchPrinterStatus();
-    const timer = setInterval(fetchPrinterStatus, 15000);
-    return () => clearInterval(timer);
+    // Initial fetch
+    printerService.getPrinter().then(setPrinter).catch(() => {});
+
+    // Subscribe to SSE real-time telemetry stream
+    const unsubscribe = realtimeClient.onPrinter((updatedPrinter) => {
+      setPrinter(updatedPrinter);
+    });
+
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
-  const handleTestConnection = async () => {
-    setTesting(true);
+  const handleCheckNow = async () => {
+    setChecking(true);
     try {
-      await printerService.testConnection();
-      await fetchPrinterStatus();
+      const updated = await printerService.checkNow();
+      setPrinter(updated);
     } catch {
       // Handled
     } finally {
-      setTesting(false);
+      setChecking(false);
     }
   };
 
-  const isOnline = printer?.connectionStatus === 'ONLINE' || printer?.connectionStatus === 'BUSY';
+  const getStatusColor = (status?: PrinterOperationalStatus) => {
+    switch (status) {
+      case 'ONLINE':
+      case 'IDLE':
+        return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30';
+      case 'PRINTING':
+      case 'BUSY':
+        return 'bg-blue-500/15 text-blue-400 border-blue-500/30';
+      case 'PAPER_OUT':
+      case 'TONER_LOW':
+        return 'bg-amber-500/15 text-amber-400 border-amber-500/30';
+      case 'ERROR':
+      case 'OFFLINE':
+        return 'bg-rose-500/15 text-rose-400 border-rose-500/30';
+      default:
+        return 'bg-slate-800 text-slate-400 border-slate-700';
+    }
+  };
+
+  const formatAckTime = (iso?: string) => {
+    if (!iso) return 'Waiting...';
+    try {
+      const d = new Date(iso);
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } catch {
+      return 'Unknown';
+    }
+  };
+
+  const operationalStatus: PrinterOperationalStatus = printer?.currentStatus || 'ONLINE';
 
   return (
     <nav className="bg-slate-900/90 backdrop-blur-md border-b border-slate-800 sticky top-0 z-50">
@@ -58,12 +87,12 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab }) => 
                 AirPrint <span className="text-brand-400 font-extrabold">Hub</span>
               </div>
               <div className="text-[10px] text-slate-400 tracking-wider uppercase font-mono">
-                Remote PDF Printing
+                Direct Wi-Fi PDF Printing
               </div>
             </div>
           </div>
 
-          {/* Navigation - Exactly Two Tabs: Print Document & History */}
+          {/* Navigation - Exactly Two Pages: Print Document & History */}
           <div className="flex items-center gap-1">
             <button
               onClick={() => setCurrentTab('print')}
@@ -89,22 +118,31 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab }) => 
             </button>
           </div>
 
-          {/* Target Printer IP Badge (192.168.1.37) */}
-          <div className="hidden sm:flex items-center gap-2.5">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800/80 border border-slate-700/60 text-xs">
-              <span className={`h-2 w-2 rounded-full ${isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
-              <div className="text-left font-mono">
-                <span className="text-slate-300 font-semibold">192.168.1.37</span>
-                <span className="text-slate-500 ml-1.5 text-[11px]">HP M126nw</span>
+          {/* Real-Time Wi-Fi Status Bar (192.168.1.37) */}
+          <div className="hidden md:flex items-center gap-2.5">
+            <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl bg-slate-800/80 border border-slate-700/60 text-xs">
+              <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${getStatusColor(operationalStatus)}`}>
+                {operationalStatus}
+              </span>
+
+              <div className="text-left font-mono leading-tight">
+                <div className="text-slate-200 font-semibold flex items-center gap-1.5">
+                  <Radio className="h-3 w-3 text-brand-400 animate-pulse" />
+                  <span>192.168.1.37</span>
+                </div>
+                <div className="text-[10px] text-slate-500">
+                  Ack: {formatAckTime(printer?.lastAcknowledgementAt)}
+                </div>
               </div>
             </div>
+
             <button
-              onClick={handleTestConnection}
-              disabled={testing}
-              title="Test IPP Connection to 192.168.1.37"
-              className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors disabled:opacity-50"
+              onClick={handleCheckNow}
+              disabled={checking}
+              title="Force immediate IPP check now"
+              className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-700/50 transition-all disabled:opacity-50"
             >
-              <RefreshCw className={`h-4 w-4 ${testing ? 'animate-spin text-brand-400' : ''}`} />
+              <RefreshCw className={`h-4 w-4 ${checking ? 'animate-spin text-brand-400' : ''}`} />
             </button>
           </div>
         </div>

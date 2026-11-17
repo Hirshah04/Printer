@@ -66,6 +66,7 @@ export interface PrintJob {
   printerIPPJobId?: string | number;
   printerJobState?: string;
   lastAcknowledgementAt?: string;
+  message?: string;
   printerError?: string;
   printerStatusMessage?: string;
   errorMessage?: string;

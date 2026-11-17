@@ -281,23 +281,38 @@ export class PrinterMonitorService {
           // 3='pending', 4='pending-held', 5='processing', 6='processing-stopped',
           // 7='canceled', 8='aborted', 9='completed'
           if (jobState === 'completed' || jobState === 9) {
-            console.log(`[PrinterMonitor] Verified job #${ippJobIdNum} COMPLETED by printer!`);
-            const updated = await dbService.updateJob(job._id, {
-              status: 'COMPLETED',
-              printerJobState: 'completed',
-              completionVerified: true,
-              sheetsPrinted: sheets ?? 1,
-              completedAt: nowIso,
-              lastAcknowledgementAt: nowIso,
-              message: 'Printer reports that the document has finished printing.',
-              verificationDetails: {
-                verifiedAt: nowIso,
-                evidence: `Printer IPP reported job-state: completed (9). Sheets completed: ${sheets ?? 1}`,
-                finalPrinterState: 'IDLE',
+            if (sheets === 0) {
+              console.warn(`[PrinterMonitor] Job #${ippJobIdNum} completed with 0 sheets printed.`);
+              const updated = await dbService.updateJob(job._id, {
+                status: 'FAILED',
+                printerJobState: 'completed',
+                completionVerified: false,
+                sheetsPrinted: 0,
+                failedAt: nowIso,
+                lastAcknowledgementAt: nowIso,
+                printerError: 'Printer reported job completed but 0 sheets were printed. Check printer display for prompt or paper feed error.',
+                message: 'No physical sheets were printed. Please check printer control panel for prompts.',
+              });
+              if (updated) sseService.broadcastJobUpdate(updated);
+            } else {
+              console.log(`[PrinterMonitor] Verified job #${ippJobIdNum} COMPLETED by printer! Sheets: ${sheets ?? 1}`);
+              const updated = await dbService.updateJob(job._id, {
+                status: 'COMPLETED',
+                printerJobState: 'completed',
+                completionVerified: true,
                 sheetsPrinted: sheets ?? 1,
-              },
-            });
-            if (updated) sseService.broadcastJobUpdate(updated);
+                completedAt: nowIso,
+                lastAcknowledgementAt: nowIso,
+                message: 'Printer reports that the document has finished printing.',
+                verificationDetails: {
+                  verifiedAt: nowIso,
+                  evidence: `Printer IPP reported job-state: completed (9). Sheets completed: ${sheets ?? 1}`,
+                  finalPrinterState: 'IDLE',
+                  sheetsPrinted: sheets ?? 1,
+                },
+              });
+              if (updated) sseService.broadcastJobUpdate(updated);
+            }
           } else if (jobState === 'processing' || jobState === 5) {
             const updated = await dbService.updateJob(job._id, {
               status: 'PRINTING',

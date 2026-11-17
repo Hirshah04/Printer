@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { printerService, jobService } from '../services/api';
-import { Printer, PrintJob } from '../types';
+import { realtimeClient } from '../services/realtime';
+import { Printer, PrintJob, PrinterOperationalStatus } from '../types';
 import { StatusBadge } from '../components/StatusBadge';
 import {
   FileUp,
@@ -8,10 +9,14 @@ import {
   Printer as PrinterIcon,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
   Copy,
   Sparkles,
   ArrowRight,
   RefreshCw,
+  Radio,
+  Clock,
+  ShieldCheck,
 } from 'lucide-react';
 
 interface PrintPageProps {
@@ -27,6 +32,7 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [isChecking, setIsChecking] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [activeJob, setActiveJob] = useState<PrintJob | null>(null);
 
@@ -34,23 +40,33 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
 
   useEffect(() => {
     printerService.getPrinter().then(setPrinter).catch(() => {});
+
+    // Subscribe to SSE updates
+    const unsubPrinter = realtimeClient.onPrinter((updated) => {
+      setPrinter(updated);
+    });
+
+    const unsubJob = realtimeClient.onJob((updatedJob) => {
+      setActiveJob((prev) => (prev && prev._id === updatedJob._id ? updatedJob : prev));
+    });
+
+    return () => {
+      unsubPrinter();
+      unsubJob();
+    };
   }, []);
 
-  // Poll active job status
-  useEffect(() => {
-    if (!activeJob || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(activeJob.status)) return;
-
-    const interval = setInterval(async () => {
-      try {
-        const updated = await jobService.getJobById(activeJob._id);
-        setActiveJob(updated);
-      } catch {
-        // Ignored
-      }
-    }, 2000);
-
-    return () => clearInterval(interval);
-  }, [activeJob]);
+  const handleCheckNow = async () => {
+    setIsChecking(true);
+    try {
+      const updated = await printerService.checkNow();
+      setPrinter(updated);
+    } catch {
+      // Handled
+    } finally {
+      setIsChecking(false);
+    }
+  };
 
   const handleFileDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -118,31 +134,94 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
+  const formatTime = (iso?: string) => {
+    if (!iso) return 'Pending';
+    try {
+      return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } catch {
+      return 'Unknown';
+    }
+  };
+
+  const operationalStatus: PrinterOperationalStatus = printer?.currentStatus || 'ONLINE';
+
+  const getStatusBadgeClass = (status: PrinterOperationalStatus) => {
+    switch (status) {
+      case 'ONLINE':
+      case 'IDLE':
+        return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30';
+      case 'PRINTING':
+      case 'BUSY':
+        return 'bg-blue-500/15 text-blue-400 border-blue-500/30';
+      case 'PAPER_OUT':
+      case 'TONER_LOW':
+        return 'bg-amber-500/15 text-amber-400 border-amber-500/30';
+      case 'ERROR':
+      case 'OFFLINE':
+        return 'bg-rose-500/15 text-rose-400 border-rose-500/30';
+      default:
+        return 'bg-slate-800 text-slate-400 border-slate-700';
+    }
+  };
+
   return (
     <div className="max-w-3xl mx-auto space-y-6">
-      {/* Target Printer Banner */}
-      <div className="p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 flex items-center justify-between">
-        <div className="flex items-center gap-3.5">
-          <div className="p-2.5 rounded-xl bg-slate-800 text-brand-400 border border-slate-700">
-            <PrinterIcon className="h-5 w-5" />
-          </div>
-          <div>
-            <h3 className="font-bold text-white text-base">HP LaserJet Pro MFP M126nw</h3>
-            <div className="text-xs text-slate-400 font-mono mt-0.5">
-              Printer LAN IP: <span className="text-white font-semibold">192.168.1.37:631</span> &bull; Format: <span className="text-brand-300">PCLm (Auto)</span>
+      {/* Target Printer Status Panel (Section F) */}
+      <div className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3.5">
+            <div className="p-2.5 rounded-xl bg-slate-800 text-brand-400 border border-slate-700">
+              <PrinterIcon className="h-5 w-5" />
             </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="font-bold text-white text-base">HP LaserJet Pro MFP M126nw</h3>
+                <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${getStatusBadgeClass(operationalStatus)}`}>
+                  {operationalStatus}
+                </span>
+              </div>
+              <div className="text-xs text-slate-400 font-mono mt-0.5 flex items-center gap-2">
+                <span className="flex items-center gap-1 text-slate-300">
+                  <Radio className="h-3 w-3 text-brand-400" />
+                  192.168.1.37:631 (Wi-Fi)
+                </span>
+                <span>&bull;</span>
+                <span>PCLm 600 DPI</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2.5 self-end sm:self-center">
+            <div className="text-right text-[11px] font-mono text-slate-400 hidden sm:block">
+              <div className="flex items-center gap-1 justify-end text-slate-300">
+                <Clock className="h-3 w-3 text-slate-400" />
+                <span>Ack: {formatTime(printer?.lastAcknowledgementAt)}</span>
+              </div>
+              <div className="text-slate-500">Every 10s Telemetry</div>
+            </div>
+
+            <button
+              onClick={handleCheckNow}
+              disabled={isChecking}
+              title="Poll printer now"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition-all disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isChecking ? 'animate-spin text-brand-400' : ''}`} />
+              <span>Check Now</span>
+            </button>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
-            printer?.connectionStatus === 'ONLINE'
-              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
-              : 'bg-slate-800 text-slate-400 border border-slate-700'
-          }`}>
-            {printer?.connectionStatus || 'ONLINE'}
-          </span>
-        </div>
+        {/* Hardware Alert Banner */}
+        {printer?.lastError && (
+          <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-start gap-2.5">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400 mt-0.5" />
+            <div className="space-y-0.5">
+              <div className="font-semibold text-amber-200">Printer Notice:</div>
+              <div>{printer.lastError}</div>
+            </div>
+          </div>
+        )}
       </div>
 
       {error && (
@@ -186,7 +265,7 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
                 </div>
                 <h4 className="text-lg font-bold text-white max-w-md truncate">{file.name}</h4>
                 <p className="text-xs text-slate-400 mt-1 font-mono">
-                  {(file.size / 1024 / 1024).toFixed(2)} MB &bull; Converted to PCLm for HP M126nw
+                  {(file.size / 1024 / 1024).toFixed(2)} MB &bull; Converted to 600 DPI PCLm for HP M126nw
                 </p>
                 <button
                   type="button"
@@ -208,7 +287,7 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
                   Drop your PDF here, or <span className="text-brand-400">browse files</span>
                 </h4>
                 <p className="text-xs text-slate-400 mt-1">
-                  Upload any PDF document. Automatically converted & sent to 192.168.1.37.
+                  Upload any PDF document. Directly transmitted across Wi-Fi to 192.168.1.37.
                 </p>
               </div>
             )}
@@ -297,7 +376,7 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
             {/* Submit Bar */}
             <div className="pt-4 border-t border-slate-800 flex items-center justify-between">
               <span className="text-xs text-slate-400">
-                Direct to 192.168.1.37 via Router VPN
+                Direct to 192.168.1.37 via Wi-Fi Interface
               </span>
               <button
                 type="submit"
@@ -320,13 +399,20 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
           </div>
         </form>
       ) : (
-        /* Live Execution Tracking Card */
+        /* Live Execution Tracking Card (Section F) */
         <div className="p-6 sm:p-8 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-2xl space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-800">
             <div>
-              <span className="text-xs font-mono uppercase tracking-wider text-slate-400">
-                Live Print Execution
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono uppercase tracking-wider text-slate-400">
+                  Live Print Execution
+                </span>
+                {activeJob.printerIPPJobId && (
+                  <span className="px-2 py-0.5 rounded-md bg-slate-800 text-brand-300 font-mono text-xs border border-slate-700">
+                    Printer Job #{activeJob.printerIPPJobId}
+                  </span>
+                )}
+              </div>
               <h3 className="text-xl font-bold text-white mt-1">{activeJob.documentName}</h3>
               <div className="text-xs text-slate-400 mt-1 font-mono">
                 {activeJob.pageCount} page(s) &bull; {activeJob.copies} copy(ies) &bull; Target: 192.168.1.37
@@ -345,22 +431,22 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
                 done: ['QUEUED', 'PROCESSING', 'SENT_TO_PRINTER', 'PRINTER_ACCEPTED', 'PRINTING', 'COMPLETED'].includes(activeJob.status),
               },
               {
-                title: '2. PCLm Render',
-                desc: 'Converting raster',
+                title: '2. 600 DPI PCLm',
+                desc: 'Hardware raster render',
                 active: ['PROCESSING', 'SENT_TO_PRINTER', 'PRINTER_ACCEPTED', 'PRINTING', 'COMPLETED'].includes(activeJob.status),
                 done: ['SENT_TO_PRINTER', 'PRINTER_ACCEPTED', 'PRINTING', 'COMPLETED'].includes(activeJob.status),
               },
               {
-                title: '3. VPN to 192.168.1.37',
-                desc: 'Sending to IPP 631',
+                title: '3. Wi-Fi Transmission',
+                desc: 'Sent to 192.168.1.37',
                 active: ['SENT_TO_PRINTER', 'PRINTER_ACCEPTED', 'PRINTING', 'COMPLETED'].includes(activeJob.status),
                 done: ['PRINTER_ACCEPTED', 'PRINTING', 'COMPLETED'].includes(activeJob.status),
               },
               {
                 title: '4. Physical Print',
-                desc: 'Printed on M126nw',
+                desc: 'Hardware output',
                 active: ['PRINTING', 'COMPLETED'].includes(activeJob.status),
-                done: activeJob.status === 'COMPLETED',
+                done: activeJob.status === 'COMPLETED' && !!activeJob.completionVerified,
               },
             ].map((step, idx) => (
               <div
@@ -379,29 +465,60 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
             ))}
           </div>
 
-          {activeJob.status === 'COMPLETED' && (
-            <div className="p-4 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 flex items-center gap-3">
-              <CheckCircle2 className="h-6 w-6 text-emerald-400 shrink-0" />
+          {/* Strict Verified Completion Banner (Section 8 & Rule 17.D) */}
+          {activeJob.status === 'COMPLETED' && activeJob.completionVerified && (
+            <div className="p-4 rounded-2xl bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 flex items-start gap-3 shadow-lg shadow-emerald-500/10">
+              <ShieldCheck className="h-6 w-6 text-emerald-400 shrink-0 mt-0.5" />
               <div>
-                <div className="font-bold text-sm">Physical Print Verified!</div>
-                <div className="text-xs text-emerald-300/80">
-                  {activeJob.verificationDetails?.evidence || 'Document printed on HP LaserJet M126nw.'}
+                <div className="font-bold text-sm text-emerald-300">Physical Print Verified!</div>
+                <div className="text-xs text-emerald-300/90 mt-0.5">
+                  {activeJob.message || 'Printer reports that the document has finished printing.'}
+                </div>
+                {activeJob.verificationDetails?.evidence && (
+                  <div className="text-[11px] font-mono text-emerald-400/80 mt-1">
+                    Telemetry: {activeJob.verificationDetails.evidence}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Unverified Completion Limitation Banner (Rule 17.D) */}
+          {activeJob.status === 'COMPLETED' && !activeJob.completionVerified && (
+            <div className="p-4 rounded-2xl bg-amber-950/40 border border-amber-500/40 text-amber-300 flex items-start gap-3">
+              <AlertTriangle className="h-6 w-6 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <div className="font-bold text-sm text-amber-300">Spool Complete - Physical Output Unconfirmed</div>
+                <div className="text-xs text-amber-200/90 mt-0.5">
+                  {activeJob.message || 'Printer accepted job; physical completion could not be confirmed via telemetry.'}
+                </div>
+                <div className="text-[11px] text-amber-300/70 mt-1">
+                  Please verify physical paper in the output tray.
                 </div>
               </div>
             </div>
           )}
 
+          {/* Print Job Failure */}
           {activeJob.status === 'FAILED' && (
-            <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-500/40 text-rose-300">
-              <div className="font-bold text-sm text-rose-400 mb-1">Print Job Failed</div>
-              <div className="text-xs font-mono">{activeJob.errorMessage || 'Check printer connection'}</div>
+            <div className="p-4 rounded-2xl bg-rose-950/40 border border-rose-500/40 text-rose-300 space-y-1.5">
+              <div className="font-bold text-sm text-rose-400 flex items-center gap-2">
+                <AlertCircle className="h-4 w-4" />
+                <span>Print Job Execution Failed</span>
+              </div>
+              <div className="text-xs font-mono text-rose-200">
+                {activeJob.printerError || activeJob.errorMessage || 'Check printer connection'}
+              </div>
+              <div className="text-[11px] text-rose-300/80 mt-2">
+                Tip: If the printer LCD shows "Used Black Cartridge in use", press the <span className="font-bold text-white">[OK]</span> button on the printer control panel to acknowledge and continue printing.
+              </div>
             </div>
           )}
 
           <div className="pt-4 border-t border-slate-800 flex items-center justify-between">
             <button
               onClick={resetForm}
-              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold"
+              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-colors"
             >
               Print Another Document
             </button>

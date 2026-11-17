@@ -56,7 +56,7 @@ export class PCLmConverter {
     options: ConversionOptions = {}
   ): Promise<ConversionResult> {
     const paperSize = (options.paperSize || 'A4').toLowerCase();
-    const dpi = options.resolutionDpi || 300;
+    const dpi = options.resolutionDpi || 600;
     const gs = await this.findGhostscript();
 
     try {
