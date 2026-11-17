@@ -82,7 +82,6 @@ export class JobConsumer {
     const jobId = job._id;
     console.log(`[Worker] Processing Job ${jobId} for "${job.documentName}"`);
 
-    const tempDir = path.join(os.tmpdir(), `worker-print-${jobId}`);
     const tempPdf = path.join(os.tmpdir(), `worker-${jobId}.pdf`);
 
     try {
@@ -104,7 +103,7 @@ export class JobConsumer {
       // 2. On Windows, route directly through the official Windows print driver for 100% reliable printing
       if (process.platform === 'win32') {
         const winPrinter = 'HP LaserJet Pro MFP M126nw';
-        console.log(`[Worker] Windows environment detected. Printing directly via Windows driver: "${winPrinter}"...`);
+        console.log(`[Worker] Windows detected. Printing via Windows driver: "${winPrinter}"...`);
         await this.updateStatus(jobId, 'PROCESSING', `Printing via Windows driver: ${winPrinter}...`);
 
         const printed = await this.printViaWindowsDriver(tempPdf, winPrinter);
@@ -133,7 +132,7 @@ export class JobConsumer {
         console.warn(`[Worker] Windows driver print failed, falling back to direct network protocols.`);
       }
 
-      // 2. Convert PDF to native HP LaserJet PCLm stream at 600 DPI (supported hardware resolution)
+      // 3. Fallback: Convert PDF to native HP LaserJet PCLm stream at 600 DPI
       await this.updateStatus(jobId, 'PROCESSING', 'Converting document to HP PCLm raster stream at 600 DPI...');
 
       const conversion = await pclmConverter.convertPdfToPclm(pdfBuffer, {
@@ -145,7 +144,6 @@ export class JobConsumer {
       const targetPort = printer?.ippPort || 631;
       const targetEndpoint = printer?.ippEndpoint || '/ipp/printer';
 
-      // 3. Submit to printer: IPP first, with automatic fallback to RAW port 9100 with PJL wrapper
       await this.updateStatus(jobId, 'SENT_TO_PRINTER', `Sending PCLm data to ${targetLanIp}...`);
 
       let isSubmittedViaIpp = false;
@@ -177,7 +175,6 @@ export class JobConsumer {
         console.warn(`[Worker] IPP error: ${ippErr.message}. Falling back to RAW port 9100.`);
       }
 
-      // If IPP failed, fallback to RAW Port 9100 with PJL wrapper
       if (!isSubmittedViaIpp) {
         console.log(`[Worker] Streaming directly to HP JetDirect RAW port 9100 on ${targetLanIp}...`);
         await this.streamToRawPort(
@@ -224,7 +221,6 @@ export class JobConsumer {
           }
         );
       } else {
-        // Wait a few seconds for physical paper feed
         await new Promise((r) => setTimeout(r, 4000));
         await this.updateStatus(
           jobId,
@@ -245,7 +241,6 @@ export class JobConsumer {
       await this.updateStatus(jobId, 'FAILED', err.message, undefined, err.message);
     } finally {
       fs.promises.unlink(tempPdf).catch(() => {});
-      fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
     }
   }
 
@@ -316,28 +311,44 @@ export class JobConsumer {
   }
 
   /**
-   * Print PDF via Windows native print subsystem using Adobe Acrobat or PowerShell
+   * Print PDF via Windows native print subsystem.
+   * Uses Python print_helper.py which renders PDF via PyMuPDF + Windows GDI.
+   * Works reliably with WSD network printers through the official Windows driver stack.
    */
   private async printViaWindowsDriver(pdfPath: string, printerName: string): Promise<boolean> {
-    const acrobatPath = 'C:\\Program Files\\Adobe\\Acrobat DC\\Acrobat\\Acrobat.exe';
-    if (fs.existsSync(acrobatPath)) {
-      try {
-        console.log(`[Worker] Executing Adobe Acrobat silent print for "${printerName}"...`);
-        await execAsync(`"${acrobatPath}" /t "${pdfPath}" "${printerName}"`);
-        return true;
-      } catch (err: any) {
-        console.warn(`[Worker] Acrobat print warning: ${err.message}`);
+    const workerRoot = path.resolve(process.cwd());
+    const helperPaths = [
+      path.join(workerRoot, 'print_helper.py'),
+      path.join(workerRoot, '..', 'print_helper.py'),
+      path.join(workerRoot, 'worker', 'print_helper.py'),
+    ];
+
+    let helperPath = '';
+    for (const hp of helperPaths) {
+      if (fs.existsSync(hp)) {
+        helperPath = hp;
+        break;
       }
     }
 
-    try {
-      console.log(`[Worker] Executing PowerShell silent print for "${printerName}"...`);
-      await execAsync(
-        `powershell -NoProfile -Command "Start-Process -FilePath '${pdfPath}' -Verb PrintTo -ArgumentList '\"${printerName}\"' -PassThru | Out-Null; Start-Sleep -Seconds 3"`
-      );
-      return true;
-    } catch (err: any) {
-      console.warn(`[Worker] PowerShell PrintTo failed: ${err.message}`);
+    if (helperPath) {
+      try {
+        console.log(`[Worker] Printing via Python GDI helper: "${helperPath}" -> "${printerName}"...`);
+        const { stdout, stderr } = await execAsync(
+          `python "${helperPath}" "${pdfPath}" "${printerName}"`,
+          { timeout: 60000 }
+        );
+        if (stdout) console.log(`[Worker] PrintHelper: ${stdout.trim()}`);
+        if (stderr && !stderr.includes('FutureWarning')) console.warn(`[Worker] PrintHelper stderr: ${stderr.trim()}`);
+        console.log(`[Worker] GDI print helper completed for "${printerName}" ✓`);
+        return true;
+      } catch (err: any) {
+        console.warn(`[Worker] Python GDI print helper failed: ${err.message}`);
+        if (err.stdout) console.log(`[Worker] Helper stdout: ${err.stdout}`);
+        if (err.stderr) console.warn(`[Worker] Helper stderr: ${err.stderr}`);
+      }
+    } else {
+      console.warn(`[Worker] print_helper.py not found in: ${helperPaths.join(', ')}`);
     }
 
     return false;
@@ -346,10 +357,10 @@ export class JobConsumer {
   /**
    * Monitor Windows Print Spooler until job has flushed to printer hardware
    */
-  private async waitForWindowsSpooler(printerName: string, maxWaitSeconds = 30): Promise<void> {
+  private async waitForWindowsSpooler(printerName: string, maxWaitSeconds = 60): Promise<void> {
     const start = Date.now();
-    // Wait an initial 3 seconds for spooler entry to register
-    await new Promise((r) => setTimeout(r, 3000));
+    // Wait an initial 5 seconds for spooler entry to register after SumatraPDF
+    await new Promise((r) => setTimeout(r, 5000));
 
     while (Date.now() - start < maxWaitSeconds * 1000) {
       try {
@@ -361,10 +372,12 @@ export class JobConsumer {
           console.log(`[Worker] Windows print spooler empty: print job completed!`);
           return;
         }
+        console.log(`[Worker] Spooler has ${count} job(s), waiting...`);
       } catch {
         return;
       }
       await new Promise((r) => setTimeout(r, 2000));
     }
+    console.log(`[Worker] Spooler wait timeout reached, assuming print completed.`);
   }
 }
