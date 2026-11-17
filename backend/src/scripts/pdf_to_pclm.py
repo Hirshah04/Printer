@@ -1,33 +1,7 @@
 import sys
 import os
+import zlib
 import fitz # PyMuPDF
-
-def encode_rle(data: bytes) -> bytes:
-    i = 0
-    n = len(data)
-    out = bytearray()
-    while i < n:
-        # Check for run of identical bytes
-        run_len = 1
-        while i + run_len < n and run_len < 128 and data[i + run_len] == data[i]:
-            run_len += 1
-        if run_len >= 3:
-            # RunLength: 257 - run_len
-            out.append(257 - run_len)
-            out.append(data[i])
-            i += run_len
-        else:
-            # Literal run
-            lit_start = i
-            while i < n and (i - lit_start) < 128:
-                if i + 2 < n and data[i] == data[i+1] == data[i+2]:
-                    break
-                i += 1
-            lit_len = i - lit_start
-            out.append(lit_len - 1)
-            out.extend(data[lit_start:i])
-    out.append(128) # PDF RunLengthDecode EOD marker
-    return bytes(out)
 
 def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128):
     doc = fitz.open(pdf_path)
@@ -74,7 +48,7 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128):
         while y < height:
             curr_strip_h = min(strip_height, height - y)
             strip_bytes = raw_samples[y * row_stride : (y + curr_strip_h) * row_stride]
-            compressed = encode_rle(strip_bytes)
+            compressed = zlib.compress(strip_bytes, level=6)
             
             xobject_num = alloc_obj()
             swaths.append({
@@ -133,28 +107,27 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128):
         # 4. Write Pages, Contents, and Swath XObjects
         for p in page_records:
             write_obj_header(p['page_obj_num'])
-            xobjects_dict = " ".join([f"/res{s['idx']} {s['xobject_num']} 0 R" for s in p['swaths']])
+            xobjects_dict = " ".join([f"/Image{s['idx']} {s['xobject_num']} 0 R" for s in p['swaths']])
             write_str(
                 f"<<\n/Type /Page\n"
                 f"/Parent {pages_num} 0 R\n"
-                f"/MediaBox [ 0 0 {p['width_points']} {p['height_points']} ]\n"
                 f"/Resources << /XObject << {xobjects_dict} >> >>\n"
-                f"/Contents [ {p['content_obj_num']} 0 R ]\n"
-                f"/PCLmPageStripHeight {strip_height}\n"
-                f"/PCLmPageStripType /RunLengthDecode\n>>\n"
+                f"/MediaBox [ 0 0 {p['width_points']} {p['height_points']} ]\n"
+                f"/Contents [ {p['content_obj_num']} 0 R ]\n>>\n"
             )
             write_obj_footer()
 
-            # Content Stream
+            # Content Stream following HP official jipp PclmWriter spec
             scale_str = f"{p['scale']:.6f}"
             cs_parts = []
             cs_parts.append(f"{scale_str} 0 0 {scale_str} 0 0 cm\n")
+            cs_parts.append("/P <</MCID 0>> BDC q\n")
             
             for s in p['swaths']:
                 page_y_offset = p['height_pixels'] - s['y_offset'] - s['height']
-                cs_parts.append("/P <</MCID 0>> BDC q\n")
                 cs_parts.append(f"{p['width_pixels']} 0 0 {s['height']} 0 {page_y_offset} cm\n")
-                cs_parts.append(f"/res{s['idx']} Do Q\n")
+                cs_parts.append(f"/Image{s['idx']} Do Q\n")
+                cs_parts.append("/P <</MCID 0>> BDC q\n")
                 
             content_bytes = "".join(cs_parts).encode('ascii')
 
@@ -164,7 +137,7 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128):
             write_str("\nendstream\n")
             write_obj_footer()
 
-            # Swath XObjects with RunLengthDecode filter
+            # Swath XObjects with FlateDecode filter (HP PCLm standard)
             for s in p['swaths']:
                 write_obj_header(s['xobject_num'])
                 write_str(
@@ -174,8 +147,9 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128):
                     f"/Height {s['height']}\n"
                     f"/ColorSpace /DeviceGray\n"
                     f"/BitsPerComponent 8\n"
-                    f"/Filter /RunLengthDecode\n"
-                    f"/Length {len(s['data'])}\n>>\nstream\n"
+                    f"/Filter /FlateDecode\n"
+                    f"/Length {len(s['data'])}\n"
+                    f"/Name /ColorStrip\n>>\nstream\n"
                 )
                 write_bytes(s['data'])
                 write_str("\nendstream\n")
@@ -196,7 +170,7 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128):
             f"startxref\n{xref_offset}\n%%EOF\n"
         )
 
-    print(f"PCLm 600 DPI RLE generated: {output_pclm_path} ({os.path.getsize(output_pclm_path)} bytes)")
+    print(f"PCLm 600 DPI FlateDecode generated: {output_pclm_path} ({os.path.getsize(output_pclm_path)} bytes)")
 
 if __name__ == '__main__':
     pdf = sys.argv[1]

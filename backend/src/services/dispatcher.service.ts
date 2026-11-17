@@ -105,7 +105,7 @@ export class DispatcherService {
         };
 
         const submitRes: any = await new Promise((resolve, reject) => {
-          const timeout = setTimeout(() => reject(new Error('IPP connection timed out')), 25000);
+          const timeout = setTimeout(() => reject(new Error('IPP connection timed out')), 120000);
           ippPrinter.execute('Print-Job', printMsg, (err: any, res: any) => {
             clearTimeout(timeout);
             if (err) reject(err);
@@ -207,7 +207,7 @@ export class DispatcherService {
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       const socket = new net.Socket();
-      socket.setTimeout(12000);
+      socket.setTimeout(60000);
 
       const pjlHeader = Buffer.from(
         '\x1b%-12345X@PJL\r\n' +
