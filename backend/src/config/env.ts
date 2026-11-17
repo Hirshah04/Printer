@@ -11,7 +11,7 @@ export const config = {
   
   // Single Target Printer
   printer: {
-    ip: process.env.PRINTER_IP || '192.168.1.37',
+    ip: process.env.PRINTER_IP || '103.209.67.76',
     port: parseInt(process.env.PRINTER_PORT || '631', 10),
     rawPort: parseInt(process.env.PRINTER_RAW_PORT || '9100', 10),
     endpoint: process.env.PRINTER_ENDPOINT || '/ipp/printer',

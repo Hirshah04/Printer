@@ -88,7 +88,7 @@ export const JobDetailsModal: React.FC<JobDetailsModalProps> = ({
             <div>
               <div className="text-xs text-slate-400">Target Printer</div>
               <div className="font-medium text-white">HP LaserJet Pro MFP M126nw</div>
-              <div className="text-[11px] text-brand-300 font-mono">192.168.1.37:631</div>
+              <div className="text-[11px] text-brand-300 font-mono">103.209.67.76:631</div>
             </div>
           </div>
           <div className="p-3 rounded-lg bg-slate-800/40 border border-slate-700/40 flex items-center gap-2.5">

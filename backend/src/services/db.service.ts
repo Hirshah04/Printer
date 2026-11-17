@@ -123,7 +123,11 @@ class JsonDbService {
           this.jobs = data.jobs;
         }
         if (data.printerState) {
-          this.printerState = { ...this.printerState, ...data.printerState };
+          this.printerState = {
+            ...this.printerState,
+            ...data.printerState,
+            lanIp: config.printer.ip,
+          };
         }
         console.log(`[JSON Store] Loaded ${this.jobs.length} jobs from ${config.dataFile}`);
       }

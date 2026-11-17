@@ -54,7 +54,7 @@ export const HistoryPage: React.FC = () => {
             Print Job History
           </h2>
           <p className="text-sm text-slate-400 mt-1">
-            History of all documents submitted to HP LaserJet M126nw (192.168.1.37)
+            History of all documents submitted to HP LaserJet M126nw (103.209.67.76)
           </p>
         </div>
 

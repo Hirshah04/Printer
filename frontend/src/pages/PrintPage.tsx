@@ -486,7 +486,7 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
             {/* Submit Bar */}
             <div className="pt-4 border-t border-slate-800 flex items-center justify-between">
               <span className="text-xs text-slate-400">
-                Direct to 192.168.1.37 via Wi-Fi Interface
+                Direct to {printer?.lanIp || '103.209.67.76'}
               </span>
               <button
                 type="submit"
@@ -525,7 +525,7 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
               </div>
               <h3 className="text-xl font-bold text-white mt-1">{activeJob.documentName}</h3>
               <div className="text-xs text-slate-400 mt-1 font-mono">
-                {activeJob.pageCount} page(s) &bull; {activeJob.copies} copy(ies) &bull; Target: 192.168.1.37
+                {activeJob.pageCount} page(s) &bull; {activeJob.copies} copy(ies) &bull; Target: {printer?.lanIp || '103.209.67.76'}
               </div>
             </div>
             <StatusBadge status={activeJob.status} />
@@ -547,8 +547,8 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
                 done: ['SENT_TO_PRINTER', 'PRINTER_ACCEPTED', 'PRINTING', 'COMPLETED'].includes(activeJob.status),
               },
               {
-                title: '3. Wi-Fi Transmission',
-                desc: 'Sent to 192.168.1.37',
+                title: '3. Transmission',
+                desc: `Sent to ${printer?.lanIp || '103.209.67.76'}`,
                 active: ['SENT_TO_PRINTER', 'PRINTER_ACCEPTED', 'PRINTING', 'COMPLETED'].includes(activeJob.status),
                 done: ['PRINTER_ACCEPTED', 'PRINTING', 'COMPLETED'].includes(activeJob.status),
               },
