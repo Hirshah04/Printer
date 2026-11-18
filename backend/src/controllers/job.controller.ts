@@ -64,13 +64,14 @@ export async function createJob(req: Request, res: Response): Promise<void> {
 
     console.log(`[JobController] Job created: ${job._id} - ${job.documentName} (${job.pageCount} p, ${job.copies}x)`);
 
-    // If an active local print worker is connected to the backend, let it claim and print the job over the local Wi-Fi.
-    // Otherwise, attempt direct dispatch from the server.
-    if (hasActiveWorker()) {
+    // In Method 1 (Direct Cloud Hardware Streaming):
+    // The cloud backend streams directly to the router's forwarded Port 9100 with zero reliance on local devices or worker daemons.
+    // Worker processing is only opted-in if explicitly configured via REQUIRE_WORKER=true.
+    if (process.env.REQUIRE_WORKER === 'true' && hasActiveWorker()) {
       const worker = getActiveWorkerInfo();
       console.log(`[JobController] Active print worker detected [${worker?.workerId}]. Job ${job._id} queued for worker processing.`);
     } else {
-      console.log(`[JobController] No active print worker detected. Attempting direct dispatch to ${config.printer.ip}...`);
+      console.log(`[JobController] Method 1 Direct Dispatch: Initiating hardware streaming to ${config.printer.ip}...`);
       dispatcherService.dispatch(job._id);
     }
 

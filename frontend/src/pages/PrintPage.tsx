@@ -76,6 +76,32 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
     };
   }, []);
 
+  // Robust fallback polling for active job status in case SSE drops, reconnects, or is buffered by cloud proxies
+  useEffect(() => {
+    if (!activeJob || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(activeJob.status)) {
+      return;
+    }
+
+    const pollTimer = setInterval(async () => {
+      try {
+        const res = await jobService.getJobById(activeJob._id);
+        if (res && res.job) {
+          setActiveJob((prev) => {
+            if (!prev) return res.job;
+            if (prev.status !== res.job.status || prev.message !== res.job.message || prev.updatedAt !== res.job.updatedAt) {
+              return res.job;
+            }
+            return prev;
+          });
+        }
+      } catch {
+        // Silently ignore transient network polling errors
+      }
+    }, 1500);
+
+    return () => clearInterval(pollTimer);
+  }, [activeJob?._id, activeJob?.status]);
+
   const handleCheckNow = async () => {
     setIsChecking(true);
     try {

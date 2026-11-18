@@ -190,18 +190,16 @@ export class DispatcherService {
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       const socket = new net.Socket();
-      socket.setTimeout(45000);
 
       // Clean PJL wrapper for HP LaserJet Pro MFP M126nw.
-      // NOTE: HP LaserJet M126nw firmware returns '?' (syntax error) for @PJL SET variables.
-      // It only accepts @PJL ENTER LANGUAGE = PCLm and @PJL RESET.
+      // Standard PJL UEL + ENTER LANGUAGE = PCLm + UEL exit.
       const pjlHeader = Buffer.from(
         '\x1b%-12345X@PJL\r\n' +
         '@PJL JOB\r\n' +
         '@PJL ENTER LANGUAGE = PCLm\r\n',
         'ascii'
       );
-      const pjlFooter = Buffer.from('\r\n\x1b%-12345X@PJL\r\n@PJL EOJ\r\n\x1b%-12345X', 'ascii');
+      const pjlFooter = Buffer.from('\r\n\x1b%-12345X', 'ascii');
       const payload = Buffer.concat([pjlHeader, data, pjlFooter]);
 
       let finished = false;
@@ -209,6 +207,7 @@ export class DispatcherService {
       const cleanup = (err?: Error) => {
         if (!finished) {
           finished = true;
+          clearTimeout(connectTimer);
           socket.removeAllListeners();
           socket.destroy();
           if (err) reject(err);
@@ -216,28 +215,40 @@ export class DispatcherService {
         }
       };
 
+      // 1. Connection Timeout (15 seconds)
+      const connectTimer = setTimeout(() => {
+        cleanup(new Error(`TCP connect timeout to printer ${host}:${port}`));
+      }, 15000);
+
       socket.on('error', (err) => {
         cleanup(err);
       });
 
-      socket.on('timeout', () => {
-        cleanup(new Error(`Timeout streaming to printer raw port ${host}:${port}`));
-      });
-
+      // 2. Connect and stream
       socket.connect(port, host, () => {
+        clearTimeout(connectTimer);
+        // Once connected, set a generous 120s timeout to allow laser fuser warm-up and WAN transmission
+        socket.setTimeout(120000);
+
+        socket.on('timeout', () => {
+          cleanup(new Error(`Timeout streaming to printer raw port ${host}:${port}`));
+        });
+
         socket.write(payload, (writeErr) => {
           if (writeErr) {
             cleanup(writeErr);
             return;
           }
-          // All data has been flushed to the network socket
+          // All data has been flushed into the kernel send buffer.
+          // Disable inactivity timeout so socket draining and printer engine processing aren't aborted.
+          socket.setTimeout(0);
           try {
             socket.end();
           } catch {}
-          // Give TCP 1.5 seconds to drain buffers over WAN, then cleanly close and resolve
+          // Give TCP 2.5 seconds to flush all packets and FIN over WAN before closing socket
           setTimeout(() => {
             cleanup();
-          }, 1500);
+          }, 2500);
         });
       });
     });
@@ -438,10 +449,10 @@ export class DispatcherService {
     const printerUri = `http://${printerIp}:631/ipp/printer`;
     const ippPrinter = ipp.Printer(printerUri);
     const startTime = Date.now();
-    const maxWaitMs = 35000;
+    const maxWaitMs = 65000;
 
-    // Give printer engine 8s to start processing
-    await new Promise((r) => setTimeout(r, 8000));
+    // Give printer engine 5s to receive data and initialize print engine
+    await new Promise((r) => setTimeout(r, 5000));
 
     while (Date.now() - startTime < maxWaitMs) {
       await new Promise((r) => setTimeout(r, 3000));

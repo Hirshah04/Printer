@@ -27,7 +27,7 @@ export const App: React.FC = () => {
           </div>
           <div className="flex items-center gap-2">
             <Lock className="h-3.5 w-3.5 text-slate-400" />
-            <span>Direct Router Port Forwarding &bull; Ports 631 / 9100</span>
+            <span>Direct Router Port Forwarding &bull; Port 9100</span>
           </div>
         </div>
       </footer>
