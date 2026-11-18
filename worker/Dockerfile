@@ -36,6 +36,7 @@ COPY wireguard ./wireguard
 # Environment
 ENV NODE_ENV=production
 ENV WIREGUARD_INTERFACE=wg0
+EXPOSE 10000
 
 # Entrypoint script that can optionally bring up WireGuard before starting worker
 RUN echo '#!/bin/sh\n\
