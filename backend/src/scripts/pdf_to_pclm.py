@@ -1,29 +1,56 @@
 import sys
 import os
-import zlib
 import fitz # PyMuPDF
+
+def rle_encode(data: bytes) -> bytes:
+    """
+    Encode bytes using standard PDF RunLengthDecode (PackBits with byte 128 as EOD).
+    Matches HP LaserJet PCLm hardware-preferred RLE decompression engine.
+    """
+    i = 0
+    n = len(data)
+    out = bytearray()
+    while i < n:
+        run_len = 1
+        while i + run_len < n and data[i + run_len] == data[i] and run_len < 128:
+            run_len += 1
+        if run_len >= 3:
+            out.append(257 - run_len)
+            out.append(data[i])
+            i += run_len
+        else:
+            lit_start = i
+            while i < n:
+                if i + 2 < n and data[i] == data[i+1] == data[i+2]:
+                    break
+                i += 1
+                if i - lit_start == 128:
+                    break
+            lit_len = i - lit_start
+            out.append(lit_len - 1)
+            out.extend(data[lit_start:i])
+    out.append(128)  # EOD marker required by PDF standard
+    return bytes(out)
 
 def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_size='A4', orientation='AUTO'):
     doc = fitz.open(pdf_path)
     points_per_inch = 72.0
     scale = points_per_inch / dpi
 
-    # Exact physical dimensions at target DPI (default 600 DPI required by HP LaserJet hardware)
+    # Exact physical dimensions at target DPI (600 DPI required by HP LaserJet hardware)
     paper_upper = paper_size.upper()
     if paper_upper == 'LETTER':
-        target_w = int(round(8.5 * dpi))   # 2550 @ 300 DPI
-        target_h = int(round(11.0 * dpi))  # 3300 @ 300 DPI
+        target_w = int(round(8.5 * dpi))
+        target_h = int(round(11.0 * dpi))
         width_points = 612
         height_points = 792
     else: # Default A4 (210 x 297 mm)
-        target_w = int(round((210.0 / 25.4) * dpi))  # 2480 @ 300 DPI
-        target_h = int(round((297.0 / 25.4) * dpi))  # 3508 @ 300 DPI
+        target_w = int(round((210.0 / 25.4) * dpi))  # 4961 @ 600 DPI
+        target_h = int(round((297.0 / 25.4) * dpi))  # 7016 @ 600 DPI
         width_points = 595
         height_points = 842
 
-    objects = {}
     next_obj_num = 1
-
     def alloc_obj():
         nonlocal next_obj_num
         n = next_obj_num
@@ -32,15 +59,12 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_s
 
     catalog_num = alloc_obj()
     pages_num = alloc_obj()
-
     page_records = []
 
     for page_idx in range(len(doc)):
         page = doc[page_idx]
 
-        # Orientation handling:
-        # HP LaserJet feeds paper portrait (narrow side first).
-        # Landscape documents must be rotated 90 degrees to fit the sheet.
+        # Orientation handling
         orient_upper = orientation.upper()
         if orient_upper == 'LANDSCAPE':
             if page.rect.width < page.rect.height:
@@ -52,36 +76,29 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_s
             if page.rect.width > page.rect.height:
                 page.set_rotation((page.rotation + 90) % 360)
 
-        # Scale calculation:
-        # If document already matches standard target paper (within 3%), preserve exact 1:1 (100%) scale.
+        # 1:1 true scale preservation
         page_w_px = page.rect.width * (dpi / points_per_inch)
         page_h_px = page.rect.height * (dpi / points_per_inch)
-
         fit_x = target_w / page_w_px
         fit_y = target_h / page_h_px
         min_fit = min(fit_x, fit_y)
 
-        # If it's already within 3% of the target page, render at 1:1 scale
         if abs(min_fit - 1.0) < 0.03:
             zoom = 1.0
         elif min_fit < 1.0:
-            # Document is larger than target paper: scale down cleanly to fit without cropping
             zoom = min_fit
         else:
-            # Document is smaller than paper: fit proportionally without over-stretching
             zoom = min(min_fit, 1.0)
 
         mat = fitz.Matrix(zoom * (dpi / points_per_inch), zoom * (dpi / points_per_inch))
         rendered_pix = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
 
-        # Create exact target page canvas (pure white: 255)
+        # Pure white background canvas
         canvas = fitz.Pixmap(fitz.csGRAY, fitz.IRect(0, 0, target_w, target_h), 0)
         canvas.clear_with(255)
 
-        # Center the rendered page accurately on the physical sheet
         ox = max(0, (target_w - rendered_pix.width) // 2)
         oy = max(0, (target_h - rendered_pix.height) // 2)
-
         cw = min(rendered_pix.width, target_w - ox)
         ch = min(rendered_pix.height, target_h - oy)
         canvas.copy(rendered_pix, fitz.IRect(ox, oy, ox + cw, oy + ch))
@@ -94,14 +111,14 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_s
         page_obj_num = alloc_obj()
         content_obj_num = alloc_obj()
 
-        # Split into swaths of exact strip_height (128 rows for standard PCLm)
+        # Split into swaths of exact strip_height (128 rows preferred by HP LaserJet hardware)
         swaths = []
         y = 0
         swath_idx = 0
         while y < height:
             curr_strip_h = min(strip_height, height - y)
             strip_bytes = raw_samples[y * row_stride : (y + curr_strip_h) * row_stride]
-            compressed = zlib.compress(strip_bytes, level=6)
+            compressed = rle_encode(strip_bytes)
 
             xobject_num = alloc_obj()
             swaths.append({
@@ -112,7 +129,6 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_s
                 'data': compressed,
                 'width': width
             })
-
             y += curr_strip_h
             swath_idx += 1
 
@@ -129,35 +145,27 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_s
 
     with open(output_pclm_path, 'wb') as f:
         offsets = {}
-
-        def write_bytes(b):
-            f.write(b)
-
-        def write_str(s):
-            f.write(s.encode('ascii'))
-
+        def write_str(s): f.write(s.encode('ascii'))
         def write_obj_header(n):
             offsets[n] = f.tell()
             write_str(f"{n} 0 obj\n")
-
-        def write_obj_footer():
-            write_str("endobj\n")
+        def write_obj_footer(): write_str("endobj\n")
 
         # 1. Header conforming to HP PCLmS v1.0
         write_str("%PDF-1.7\n%PCLm 1.0\n")
 
-        # 2. Write Catalog
+        # 2. Catalog
         write_obj_header(catalog_num)
         write_str(f"<<\n/Type /Catalog\n/Pages {pages_num} 0 R\n>>\n")
         write_obj_footer()
 
-        # 3. Write Pages Tree
+        # 3. Pages Tree
         write_obj_header(pages_num)
         kids_str = " ".join([f"{p['page_obj_num']} 0 R" for p in page_records])
         write_str(f"<<\n/Type /Pages\n/Count {len(page_records)}\n/Kids [ {kids_str} ]\n>>\n")
         write_obj_footer()
 
-        # 4. Write Pages, Contents, and Swath XObjects
+        # 4. Pages, Contents, and Swath XObjects
         for p in page_records:
             write_obj_header(p['page_obj_num'])
             xobjects_dict = " ".join([f"/Image{s['idx']} {s['xobject_num']} 0 R" for s in p['swaths']])
@@ -169,16 +177,14 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_s
                 f"/Contents [ {p['content_obj_num']} 0 R ]\n"
                 f"/PCLmPageStripHeight {strip_height}\n"
                 f"/PCLmStripHeight {strip_height}\n"
-                f"/PCLmPageStripType /FlateDecode\n"
+                f"/PCLmPageStripType /RunLengthDecode\n"
                 f"/PCLmSourceResolution {dpi}\n>>\n"
             )
             write_obj_footer()
 
-            # Content Stream conforming to Wi-Fi Direct / Mopria PCLm standard
+            # Content stream
             scale_str = f"{p['scale']:.6f}"
-            cs_parts = []
-            cs_parts.append(f"{scale_str} 0 0 {scale_str} 0 0 cm\n")
-
+            cs_parts = [f"{scale_str} 0 0 {scale_str} 0 0 cm\n"]
             for s in p['swaths']:
                 page_y_offset = p['height_pixels'] - s['y_offset'] - s['height']
                 cs_parts.append("/P <</MCID 0>> BDC q\n")
@@ -186,14 +192,13 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_s
                 cs_parts.append(f"/Image{s['idx']} Do Q EMC\n")
 
             content_bytes = "".join(cs_parts).encode('ascii')
-
             write_obj_header(p['content_obj_num'])
             write_str(f"<<\n/Length {len(content_bytes)}\n>>\nstream\n")
-            write_bytes(content_bytes)
+            f.write(content_bytes)
             write_str("\nendstream\n")
             write_obj_footer()
 
-            # Swath XObjects with FlateDecode filter (HP PCLm standard)
+            # Swath XObjects with RunLengthDecode (HP preferred hardware RLE decompression)
             for s in p['swaths']:
                 write_obj_header(s['xobject_num'])
                 write_str(
@@ -203,11 +208,11 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_s
                     f"/Height {s['height']}\n"
                     f"/ColorSpace /DeviceGray\n"
                     f"/BitsPerComponent 8\n"
-                    f"/Filter /FlateDecode\n"
+                    f"/Filter /RunLengthDecode\n"
                     f"/Length {len(s['data'])}\n"
                     f"/Name /ColorStrip\n>>\nstream\n"
                 )
-                write_bytes(s['data'])
+                f.write(s['data'])
                 write_str("\nendstream\n")
                 write_obj_footer()
 
@@ -217,16 +222,14 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_s
         write_str(f"xref\n0 {total_objs}\n")
         write_str("0000000000 65535 f \n")
         for i in range(1, total_objs):
-            off = offsets.get(i, 0)
-            write_str(f"{off:010d} 00000 n \n")
+            write_str(f"{offsets.get(i, 0):010d} 00000 n \n")
 
         # 6. Trailer
         write_str(
             f"trailer\n<<\n/Size {total_objs}\n/Root {catalog_num} 0 R\n>>\n"
             f"startxref\n{xref_offset}\n%%EOF\n"
         )
-
-    print(f"PCLm {dpi} DPI ({paper_size}) generated: {output_pclm_path} ({os.path.getsize(output_pclm_path)} bytes)")
+    print(f"PCLm {dpi} DPI ({paper_size}) RLE generated: {output_pclm_path} ({os.path.getsize(output_pclm_path)} bytes)")
 
 if __name__ == '__main__':
     pdf = sys.argv[1]

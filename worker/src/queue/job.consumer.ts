@@ -262,7 +262,7 @@ export class JobConsumer {
   }
 
   /**
-   * Stream PCLm payload to HP JetDirect Port 9100 with PJL wrapper
+   * Stream PCLm payload to HP JetDirect Port 9100 with pure hardware-accepted PJL wrapper
    */
   private streamToRawPort(
     host: string,
@@ -274,14 +274,13 @@ export class JobConsumer {
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       const socket = new net.Socket();
-      socket.setTimeout(90000);
+      socket.setTimeout(45000);
 
-      const safeName = (docName || 'document').replace(/["\r\n]/g, '_');
+      // Clean PJL wrapper for HP LaserJet Pro MFP M126nw.
+      // NOTE: HP LaserJet M126nw firmware returns '?' (syntax error) for @PJL SET variables.
+      // It only accepts @PJL ENTER LANGUAGE = PCLm and @PJL RESET.
       const pjlHeader = Buffer.from(
         '\x1b%-12345X@PJL\r\n' +
-        `@PJL SET JOBNAME = "${safeName}"\r\n` +
-        `@PJL SET QTY = ${copies}\r\n` +
-        `@PJL SET PAPER = ${paper === 'Letter' ? 'LETTER' : 'A4'}\r\n` +
         '@PJL ENTER LANGUAGE = PCLm\r\n',
         'ascii'
       );
@@ -290,33 +289,34 @@ export class JobConsumer {
 
       let finished = false;
 
-      socket.connect(port, host, () => {
-        socket.write(payload, () => {
-          socket.end();
-        });
-      });
-
-      socket.on('close', () => {
+      const cleanup = (err?: Error) => {
         if (!finished) {
           finished = true;
-          resolve();
+          socket.removeAllListeners();
+          socket.destroy();
+          if (err) reject(err);
+          else resolve();
         }
-      });
+      };
 
       socket.on('error', (err) => {
-        if (!finished) {
-          finished = true;
-          socket.destroy();
-          reject(err);
-        }
+        cleanup(err);
       });
 
       socket.on('timeout', () => {
-        if (!finished) {
-          finished = true;
-          socket.destroy();
-          reject(new Error(`Timeout streaming to printer raw port ${host}:${port}`));
-        }
+        cleanup(new Error(`Timeout streaming to printer raw port ${host}:${port}`));
+      });
+
+      socket.connect(port, host, () => {
+        socket.write(payload, () => {
+          // All data has been flushed to the network socket
+          socket.end(() => {
+            // Give TCP 1 second to drain buffers over WAN, then cleanly close and resolve
+            setTimeout(() => {
+              cleanup();
+            }, 1000);
+          });
+        });
       });
     });
   }
