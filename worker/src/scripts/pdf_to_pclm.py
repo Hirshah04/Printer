@@ -46,7 +46,7 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=300, strip_height=512, paper_s
     # 2. Convert fitted A4 document to PCLm using MuPDF native C writer
     try:
         import pymupdf.mupdf as mupdf
-        opts = f'strip-height={strip_height},compression=flate,resolution={dpi}'
+        opts = f'strip-height={strip_height},compression=flate,resolution={dpi},colorspace=gray'
         writer = mupdf.FzDocumentWriter(output_pclm_path, opts, mupdf.FzDocumentWriter.PathType_PCLM)
         doc = mupdf.FzDocument(temp_fitted_path)
         writer.fz_write_document(doc)

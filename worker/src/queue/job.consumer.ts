@@ -151,7 +151,7 @@ export class JobConsumer {
       let printerJobId = '';
       let methodUsed = '';
 
-      // Protocol 1 (Primary): Direct HP JetDirect RAW Socket (Port 9100)
+      // Protocol 1: Direct HP JetDirect RAW Socket (Port 9100)
       // HP LaserJet Pro MFP M126nw natively streams PCLm via Port 9100 without filling the HTTP spool buffer.
       try {
         console.log(`[Worker] Streaming directly to HP JetDirect RAW port 9100 on ${targetLanIp}...`);
@@ -168,36 +168,23 @@ export class JobConsumer {
         methodUsed = 'HP JetDirect RAW Port 9100';
         console.log(`[Worker] RAW stream successfully delivered to ${targetLanIp}:9100!`);
       } catch (rawErr: any) {
-        console.warn(`[Worker] RAW port 9100 streaming error: ${rawErr.message}. Attempting IPP Print-Job fallback...`);
-      }
-
-      // Protocol 2 (Fallback): IPP Print-Job (Port 631)
-      if (!isSubmitted) {
+        console.warn(`[Worker] RAW port 9100 streaming error: ${rawErr.message}. Retrying Port 9100...`);
         try {
-          const submitResult = await ippClient.submitJob(
+          await new Promise((r) => setTimeout(r, 2000));
+          await this.streamToRawPort(
             targetLanIp,
-            targetPort,
-            targetEndpoint,
+            9100,
             conversion.buffer,
-            {
-              documentName: job.documentName,
-              copies: job.copies || 1,
-              paperSize: job.paperSize || 'A4',
-              orientation: job.orientation || 'PORTRAIT',
-              format: 'application/PCLm',
-            }
+            job.documentName,
+            job.paperSize || 'A4',
+            job.copies || 1
           );
-
-          if (submitResult.success) {
-            isSubmitted = true;
-            printerJobId = submitResult.printerJobId || `IPP-${Date.now().toString().slice(-4)}`;
-            methodUsed = `IPP Print-Job #${printerJobId}`;
-            console.log(`[Worker] Job accepted via IPP! IPP Job ID: #${printerJobId}`);
-          } else {
-            throw new Error(`IPP rejected submission: ${submitResult.error}`);
-          }
-        } catch (ippErr: any) {
-          throw new Error(`Both RAW Port 9100 and IPP failed: ${ippErr.message}`);
+          printerJobId = `RAW-${Date.now().toString().slice(-4)}`;
+          isSubmitted = true;
+          methodUsed = 'HP JetDirect RAW Port 9100';
+          console.log(`[Worker] RAW stream retry successful to ${targetLanIp}:9100!`);
+        } catch (retryErr: any) {
+          throw new Error(`Port 9100 delivery failed: ${retryErr.message}`);
         }
       }
 
@@ -329,14 +316,19 @@ export class JobConsumer {
       });
 
       socket.connect(port, host, () => {
-        socket.write(payload, () => {
+        socket.write(payload, (writeErr) => {
+          if (writeErr) {
+            cleanup(writeErr);
+            return;
+          }
           // All data has been flushed to the network socket
-          socket.end(() => {
-            // Give TCP 1 second to drain buffers over WAN, then cleanly close and resolve
-            setTimeout(() => {
-              cleanup();
-            }, 1000);
-          });
+          try {
+            socket.end();
+          } catch {}
+          // Give TCP 1.5 seconds to drain buffers over WAN, then cleanly close and resolve
+          setTimeout(() => {
+            cleanup();
+          }, 1500);
         });
       });
     });

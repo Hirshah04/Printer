@@ -84,11 +84,11 @@ export class DispatcherService {
       // 4. Update status to SENT_TO_PRINTER
       const jobSent = await dbService.updateJob(jobId, {
         status: 'SENT_TO_PRINTER',
-        message: `Transmitting PCLm data to printer at ${printerIp}:${printerPort}...`,
+        message: `Transmitting PCLm stream directly to HP JetDirect Port 9100 (${printerIp})...`,
       });
       if (jobSent) sseService.broadcastJobUpdate(jobSent);
 
-      // Attempt Primary Protocol: Direct HP JetDirect RAW Port 9100 with PJL wrapper
+      // Primary Protocol: Direct HP JetDirect RAW Port 9100 with PJL wrapper
       // HP LaserJet Pro MFP M126nw is a host-based printer; streaming to Port 9100 avoids the IPP "spool-area-full" buffer overflow.
       let printerJobId = '';
       let isSubmitted = false;
@@ -100,52 +100,20 @@ export class DispatcherService {
         await this.streamToRawPort(printerIp, rawPort, pclmBuffer, job.documentName, 'A4', job.copies || 1);
         printerJobId = `RAW-${Date.now().toString().slice(-4)}`;
         isSubmitted = true;
-        methodUsed = 'RAW Port 9100';
+        methodUsed = 'HP JetDirect RAW Port 9100';
         console.log(`[Dispatcher] RAW stream successfully sent to ${printerIp}:${rawPort}!`);
       } catch (rawErr: any) {
-        console.warn(`[Dispatcher] RAW Port 9100 streaming failed: ${rawErr.message}. Falling back to IPP Print-Job.`);
-      }
-
-      // Secondary Fallback: IPP Print-Job (Port 631)
-      if (!isSubmitted) {
+        console.warn(`[Dispatcher] RAW Port 9100 initial stream attempt failed: ${rawErr.message}. Retrying Port 9100...`);
         try {
-          const ippPrinter = ipp.Printer(printerUri);
-          const media = 'iso_a4_210x297mm';
-
-          const printMsg: any = {
-            'operation-attributes-tag': {
-              'requesting-user-name': 'AirPrintHub',
-              'job-name': job.documentName,
-              'document-format': 'application/PCLm',
-            },
-            'job-attributes-tag': {
-              copies: job.copies || 1,
-              media,
-              'orientation-requested': job.orientation === 'LANDSCAPE' ? 4 : 3,
-            },
-            data: pclmBuffer,
-          };
-
-          const submitRes: any = await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('IPP connection timed out')), 120000);
-            ippPrinter.execute('Print-Job', printMsg, (err: any, res: any) => {
-              clearTimeout(timeout);
-              if (err) reject(err);
-              else resolve(res);
-            });
-          });
-
-          const statusStr = String(submitRes?.statusCode || '').toLowerCase();
-          if (submitRes?.statusCode === 0 || statusStr.includes('successful') || submitRes?.['job-attributes-tag']?.['job-id']) {
-            printerJobId = String(submitRes['job-attributes-tag']?.['job-id'] || '');
-            isSubmitted = true;
-            methodUsed = `IPP Job #${printerJobId}`;
-            console.log(`[Dispatcher] Print job accepted via IPP! Job ID: #${printerJobId}`);
-          } else {
-            throw new Error(`IPP rejected submission (${submitRes?.statusCode})`);
-          }
-        } catch (ippErr: any) {
-          throw new Error(`Both RAW Port 9100 and IPP failed: ${ippErr.message}`);
+          await new Promise((r) => setTimeout(r, 2000));
+          const rawPort = config.printer.rawPort || 9100;
+          await this.streamToRawPort(printerIp, rawPort, pclmBuffer, job.documentName, 'A4', job.copies || 1);
+          printerJobId = `RAW-${Date.now().toString().slice(-4)}`;
+          isSubmitted = true;
+          methodUsed = 'HP JetDirect RAW Port 9100';
+          console.log(`[Dispatcher] RAW stream retry successful to ${printerIp}:${rawPort}!`);
+        } catch (retryErr: any) {
+          throw new Error(`Port 9100 delivery failed: ${retryErr.message}`);
         }
       }
 
@@ -257,14 +225,19 @@ export class DispatcherService {
       });
 
       socket.connect(port, host, () => {
-        socket.write(payload, () => {
+        socket.write(payload, (writeErr) => {
+          if (writeErr) {
+            cleanup(writeErr);
+            return;
+          }
           // All data has been flushed to the network socket
-          socket.end(() => {
-            // Give TCP 1 second to drain buffers over WAN, then cleanly close and resolve
-            setTimeout(() => {
-              cleanup();
-            }, 1000);
-          });
+          try {
+            socket.end();
+          } catch {}
+          // Give TCP 1.5 seconds to drain buffers over WAN, then cleanly close and resolve
+          setTimeout(() => {
+            cleanup();
+          }, 1500);
         });
       });
     });

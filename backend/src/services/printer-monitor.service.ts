@@ -170,6 +170,7 @@ export class PrinterMonitorService {
     if (reasonsStr.includes('spool-area-full')) {
       currentStatus = 'BUSY';
       lastError = 'Printer spool area is full. Waiting for current jobs to finish.';
+      this.clearStuckIppJobs(config.printer.ip, config.printer.port, config.printer.endpoint);
     }
 
     // 2. Analyze state (if no severe hardware alert overrode it)
@@ -185,6 +186,9 @@ export class PrinterMonitorService {
       } else if (pState === 'idle' || pState === 3) {
         currentStatus = 'IDLE';
         connectionStatus = 'ONLINE';
+        if (!reasonsStr.includes('media-') && !reasonsStr.includes('jam') && !reasonsStr.includes('door') && !reasonsStr.includes('toner-empty')) {
+          lastError = undefined; // Clear any old spool errors when printer is IDLE
+        }
       }
     }
 
@@ -232,6 +236,46 @@ export class PrinterMonitorService {
 
     // Real-time broadcast via SSE
     sseService.broadcastPrinterUpdate(updatedState);
+  }
+
+  /**
+   * Auto-clear stuck IPP print jobs from the printer's memory
+   */
+  private clearStuckIppJobs(ip: string, port: number, endpoint: string): void {
+    try {
+      const ippPrinter = ipp.Printer(`http://${ip}:${port}${endpoint}`);
+      ippPrinter.execute(
+        'Get-Jobs',
+        {
+          'operation-attributes-tag': {
+            'requesting-user-name': 'AirPrintHubAutoRecover',
+            'which-jobs': 'not-completed',
+          },
+        },
+        (err: any, res: any) => {
+          if (err || !res) return;
+          const jobs = res['job-attributes-tag'];
+          if (!jobs) return;
+          const jobList = Array.isArray(jobs) ? jobs : [jobs];
+          for (const j of jobList) {
+            const jId = j['job-id'];
+            if (jId) {
+              console.log(`[PrinterMonitor] Auto-clearing stuck printer IPP job #${jId}...`);
+              ippPrinter.execute(
+                'Cancel-Job',
+                {
+                  'operation-attributes-tag': {
+                    'requesting-user-name': 'AirPrintHubAutoRecover',
+                    'job-id': jId,
+                  },
+                },
+                () => {}
+              );
+            }
+          }
+        }
+      );
+    } catch {}
   }
 
   /**
