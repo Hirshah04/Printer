@@ -1,8 +1,10 @@
 import { Request, Response } from 'express';
+import net from 'net';
 import { dbService } from '../services/db.service.js';
 import { storageService } from '../services/storage.service.js';
 import { pdfService } from '../services/pdf.service.js';
 import { dispatcherService } from '../services/dispatcher.service.js';
+import { sseService } from '../services/sse.service.js';
 import { config } from '../config/env.js';
 import { hasActiveWorker, getActiveWorkerInfo } from './worker.controller.js';
 
@@ -147,7 +149,25 @@ export async function cancelJob(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    console.log(`[JobController] Job ${job._id} cancelled`);
+    console.log(`[JobController] Job ${job._id} cancelled by user`);
+    sseService.broadcastJobUpdate(job);
+
+    // Send hardware PJL RESET to Port 9100 to abort any active printer feed / spooling buffer
+    try {
+      const resetSocket = new net.Socket();
+      resetSocket.setTimeout(4000);
+      resetSocket.connect(config.printer.rawPort || 9100, config.printer.ip, () => {
+        resetSocket.write(Buffer.from('\x1b%-12345X@PJL\r\n@PJL RESET\r\n\x1b%-12345X', 'ascii'), () => {
+          resetSocket.end();
+          setTimeout(() => resetSocket.destroy(), 500);
+        });
+      });
+      resetSocket.on('error', () => resetSocket.destroy());
+      resetSocket.on('timeout', () => resetSocket.destroy());
+    } catch {
+      // Best-effort hardware cancel
+    }
+
     res.json({ success: true, message: 'Job cancelled successfully.', job });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });

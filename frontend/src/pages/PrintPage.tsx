@@ -27,6 +27,8 @@ import {
   FolderOpen,
   Crosshair,
   Check,
+  XCircle,
+  StopCircle,
 } from 'lucide-react';
 
 interface PrintPageProps {
@@ -45,6 +47,7 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
   const [isChecking, setIsChecking] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [activeJob, setActiveJob] = useState<PrintJob | null>(null);
+  const [isCancelling, setIsCancelling] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -157,6 +160,28 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
     setUploadProgress(0);
     setError('');
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleCancelJob = async () => {
+    if (!activeJob) return;
+    setIsCancelling(true);
+    try {
+      await jobService.cancelJob(activeJob._id);
+      setActiveJob((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: 'CANCELLED',
+              message: 'Print cancelled by user.',
+            }
+          : null
+      );
+    } catch (err: any) {
+      const errMsg = err.response?.data?.message || err.message || 'Failed to cancel print job';
+      setError(errMsg);
+    } finally {
+      setIsCancelling(false);
+    }
   };
 
   const formatTime = (iso?: string) => {
@@ -536,7 +561,20 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
                 {activeJob.pageCount} page(s) &bull; {activeJob.copies} copy(ies) &bull; Target: {printer?.lanIp || '103.209.67.76'}
               </div>
             </div>
-            <StatusBadge status={activeJob.status} />
+            <div className="flex items-center gap-3">
+              <StatusBadge status={activeJob.status} />
+              {!['COMPLETED', 'FAILED', 'CANCELLED'].includes(activeJob.status) && (
+                <button
+                  type="button"
+                  onClick={handleCancelJob}
+                  disabled={isCancelling}
+                  className="px-4 py-1.5 rounded-full bg-rose-600/25 hover:bg-rose-600/50 border border-rose-500/50 text-rose-200 hover:text-white font-extrabold text-xs flex items-center gap-1.5 shadow-lg shadow-rose-950/40 hover:scale-105 active:scale-95 transition-all disabled:opacity-50"
+                >
+                  <XCircle className={`h-4 w-4 text-rose-400 ${isCancelling ? 'animate-spin' : ''}`} />
+                  <span>{isCancelling ? 'Stopping...' : 'Cancel Print'}</span>
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Stepper Progress */}
@@ -612,6 +650,24 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
                 className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-md transition-all"
               >
                 Try Again
+              </button>
+            )}
+            {activeJob.status === 'CANCELLED' && (
+              <button
+                onClick={resetForm}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs border border-slate-700 shadow-md transition-all"
+              >
+                Choose Another File
+              </button>
+            )}
+            {!['COMPLETED', 'FAILED', 'CANCELLED'].includes(activeJob.status) && (
+              <button
+                onClick={handleCancelJob}
+                disabled={isCancelling}
+                className="px-4 py-2 rounded-xl bg-rose-600/30 hover:bg-rose-600/60 border border-rose-500/50 text-rose-200 hover:text-white font-bold text-xs shadow-md transition-all flex items-center gap-2 disabled:opacity-50"
+              >
+                <StopCircle className="h-4 w-4" />
+                <span>{isCancelling ? 'Stopping...' : 'Stop Print'}</span>
               </button>
             )}
           </div>
