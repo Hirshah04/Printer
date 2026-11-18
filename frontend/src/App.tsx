@@ -8,7 +8,7 @@ export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<'print' | 'history'>('print');
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col text-slate-100">
+    <div className="min-h-screen bg-ambient-nebula flex flex-col text-slate-100 selection:bg-cyan-500 selection:text-white relative">
       <Navbar currentTab={currentTab} setCurrentTab={setCurrentTab} />
 
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-8">
