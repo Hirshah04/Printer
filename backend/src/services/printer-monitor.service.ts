@@ -379,7 +379,12 @@ export class PrinterMonitorService {
               message: errorMsg,
             });
             if (updated) sseService.broadcastJobUpdate(updated);
-          } else if (jobAgeMs > 15000 && (printerState.currentStatus === 'IDLE' || (printerState.queuedJobCount || 0) === 0)) {
+          } else if (
+            job.status !== 'FAILED' &&
+            job.printerJobState !== 'aborted' &&
+            jobAgeMs > 15000 &&
+            (printerState.currentStatus === 'IDLE' || (printerState.queuedJobCount || 0) === 0)
+          ) {
             console.log(`[PrinterMonitor] Job #${ippJobIdNum} completed and purged from printer memory. Marking COMPLETED.`);
             const updated = await dbService.updateJob(job._id, {
               status: 'COMPLETED',

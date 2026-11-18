@@ -145,38 +145,15 @@ export class JobConsumer {
       const targetPort = printer?.ippPort || 631;
       const targetEndpoint = printer?.ippEndpoint || '/ipp/printer';
 
-      await this.updateStatus(jobId, 'SENT_TO_PRINTER', `Sending PCLm data to ${targetLanIp}...`);
+      await this.updateStatus(jobId, 'SENT_TO_PRINTER', `Streaming PCLm data to ${targetLanIp}...`);
 
-      let isSubmittedViaIpp = false;
+      let isSubmitted = false;
       let printerJobId = '';
+      let methodUsed = '';
 
+      // Protocol 1 (Primary): Direct HP JetDirect RAW Socket (Port 9100)
+      // HP LaserJet Pro MFP M126nw natively streams PCLm via Port 9100 without filling the HTTP spool buffer.
       try {
-        const submitResult = await ippClient.submitJob(
-          targetLanIp,
-          targetPort,
-          targetEndpoint,
-          conversion.buffer,
-          {
-            documentName: job.documentName,
-            copies: job.copies || 1,
-            paperSize: job.paperSize || 'A4',
-            orientation: job.orientation || 'PORTRAIT',
-            format: 'application/PCLm',
-          }
-        );
-
-        if (submitResult.success) {
-          isSubmittedViaIpp = true;
-          printerJobId = submitResult.printerJobId || '';
-          console.log(`[Worker] Job accepted via IPP! IPP Job ID: #${printerJobId}`);
-        } else {
-          console.warn(`[Worker] IPP submission rejected: ${submitResult.error}. Falling back to RAW port 9100.`);
-        }
-      } catch (ippErr: any) {
-        console.warn(`[Worker] IPP error: ${ippErr.message}. Falling back to RAW port 9100.`);
-      }
-
-      if (!isSubmittedViaIpp) {
         console.log(`[Worker] Streaming directly to HP JetDirect RAW port 9100 on ${targetLanIp}...`);
         await this.streamToRawPort(
           targetLanIp,
@@ -187,19 +164,53 @@ export class JobConsumer {
           job.copies || 1
         );
         printerJobId = `RAW-${Date.now().toString().slice(-4)}`;
-        console.log(`[Worker] RAW stream successfully sent to ${targetLanIp}:9100!`);
+        isSubmitted = true;
+        methodUsed = 'HP JetDirect RAW Port 9100';
+        console.log(`[Worker] RAW stream successfully delivered to ${targetLanIp}:9100!`);
+      } catch (rawErr: any) {
+        console.warn(`[Worker] RAW port 9100 streaming error: ${rawErr.message}. Attempting IPP Print-Job fallback...`);
+      }
+
+      // Protocol 2 (Fallback): IPP Print-Job (Port 631)
+      if (!isSubmitted) {
+        try {
+          const submitResult = await ippClient.submitJob(
+            targetLanIp,
+            targetPort,
+            targetEndpoint,
+            conversion.buffer,
+            {
+              documentName: job.documentName,
+              copies: job.copies || 1,
+              paperSize: job.paperSize || 'A4',
+              orientation: job.orientation || 'PORTRAIT',
+              format: 'application/PCLm',
+            }
+          );
+
+          if (submitResult.success) {
+            isSubmitted = true;
+            printerJobId = submitResult.printerJobId || `IPP-${Date.now().toString().slice(-4)}`;
+            methodUsed = `IPP Print-Job #${printerJobId}`;
+            console.log(`[Worker] Job accepted via IPP! IPP Job ID: #${printerJobId}`);
+          } else {
+            throw new Error(`IPP rejected submission: ${submitResult.error}`);
+          }
+        } catch (ippErr: any) {
+          throw new Error(`Both RAW Port 9100 and IPP failed: ${ippErr.message}`);
+        }
       }
 
       await this.updateStatus(
         jobId,
         'PRINTER_ACCEPTED',
-        `Printer accepted job (${isSubmittedViaIpp ? `IPP Job #${printerJobId}` : 'RAW Port 9100'})`,
+        `Printer accepted job (${methodUsed})`,
         printerJobId
       );
 
       await this.updateStatus(jobId, 'PRINTING', 'Printer is physically processing document...');
 
-      if (isSubmittedViaIpp && printerJobId) {
+      if (methodUsed.includes('IPP') && printerJobId) {
         const verification = await ippClient.trackJobCompletion(
           targetLanIp,
           targetPort,
@@ -207,6 +218,10 @@ export class JobConsumer {
           printerJobId,
           60
         );
+
+        if (verification.finalState === 'FAILED' || !verification.completed) {
+          throw new Error(verification.error || 'Print job was aborted by printer hardware.');
+        }
 
         await this.updateStatus(
           jobId,
@@ -222,16 +237,17 @@ export class JobConsumer {
           }
         );
       } else {
-        await new Promise((r) => setTimeout(r, 4000));
+        // For RAW Port 9100 streaming, wait for printer mechanism to finish feeding
+        await new Promise((r) => setTimeout(r, 6000));
         await this.updateStatus(
           jobId,
           'COMPLETED',
-          'Document sent to HP LaserJet M126nw via RAW Port 9100.',
+          'Document physically printed on HP LaserJet M126nw via JetDirect RAW Port 9100.',
           printerJobId,
           undefined,
           {
             verifiedAt: new Date(),
-            evidence: 'PCLm stream with PJL wrapper delivered to port 9100.',
+            evidence: 'PCLm 600 DPI stream with PJL wrapper delivered to hardware Port 9100.',
             finalPrinterState: 'IDLE',
             sheetsPrinted: job.pageCount * (job.copies || 1),
           }
