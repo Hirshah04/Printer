@@ -106,7 +106,7 @@ export class JobConsumer {
         console.log(`[Worker] Windows detected. Printing via Windows driver: "${winPrinter}"...`);
         await this.updateStatus(jobId, 'PROCESSING', `Printing via Windows driver: ${winPrinter}...`);
 
-        const printed = await this.printViaWindowsDriver(tempPdf, winPrinter);
+        const printed = await this.printViaWindowsDriver(tempPdf, winPrinter, job.copies || 1);
         if (printed) {
           const printerJobId = `WIN-${Date.now().toString().slice(-4)}`;
           await this.updateStatus(jobId, 'PRINTER_ACCEPTED', `Accepted by Windows Print Spooler (${winPrinter})`, printerJobId);
@@ -315,7 +315,7 @@ export class JobConsumer {
    * Uses Python print_helper.py which renders PDF via PyMuPDF + Windows GDI.
    * Works reliably with WSD network printers through the official Windows driver stack.
    */
-  private async printViaWindowsDriver(pdfPath: string, printerName: string): Promise<boolean> {
+  private async printViaWindowsDriver(pdfPath: string, printerName: string, copies = 1): Promise<boolean> {
     const workerRoot = path.resolve(process.cwd());
     const helperPaths = [
       path.join(workerRoot, 'print_helper.py'),
@@ -333,10 +333,10 @@ export class JobConsumer {
 
     if (helperPath) {
       try {
-        console.log(`[Worker] Printing via Python GDI helper: "${helperPath}" -> "${printerName}"...`);
+        console.log(`[Worker] Printing via Python GDI helper: "${helperPath}" -> "${printerName}" (${copies}x)...`);
         const { stdout, stderr } = await execAsync(
-          `python "${helperPath}" "${pdfPath}" "${printerName}"`,
-          { timeout: 60000 }
+          `python "${helperPath}" "${pdfPath}" "${printerName}" ${copies}`,
+          { timeout: 90000 }
         );
         if (stdout) console.log(`[Worker] PrintHelper: ${stdout.trim()}`);
         if (stderr && !stderr.includes('FutureWarning')) console.warn(`[Worker] PrintHelper stderr: ${stderr.trim()}`);
