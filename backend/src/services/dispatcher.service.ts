@@ -52,7 +52,7 @@ export class DispatcherService {
       const jobProcessing = await dbService.updateJob(jobId, {
         status: 'PROCESSING',
         startedAt: nowIso,
-        message: 'Converting document to native HP LaserJet PCLm raster format at 600 DPI...',
+        message: 'Converting document to native HP LaserJet PCLm raster format at 300 DPI...',
       });
       if (jobProcessing) sseService.broadcastJobUpdate(jobProcessing);
 
@@ -60,21 +60,26 @@ export class DispatcherService {
       const pdfBuffer = await storageService.getFileBuffer(job.storageKey);
       await fs.promises.writeFile(tempPdf, pdfBuffer);
 
-      // 3. Convert PDF to native HP LaserJet PCLm stream at 600 DPI using PyMuPDF PCLm generator
+      // 3. Convert PDF to native HP LaserJet PCLm stream at 300 DPI using PyMuPDF PCLm generator
       const pyBin = process.platform === 'win32' ? 'python' : 'python3';
-      const scriptPath = fs.existsSync(path.resolve(process.cwd(), 'dist/scripts/pdf_to_pclm.py'))
-        ? path.resolve(process.cwd(), 'dist/scripts/pdf_to_pclm.py')
-        : path.resolve(process.cwd(), 'src/scripts/pdf_to_pclm.py');
-      const cmd = `"${pyBin}" "${scriptPath}" "${tempPdf}" "${tempPclm}" 600 "${job.paperSize || 'A4'}" "${job.orientation || 'AUTO'}"`;
+      const scriptCandidates = [
+        path.resolve(process.cwd(), 'dist/scripts/pdf_to_pclm.py'),
+        path.resolve(process.cwd(), 'src/scripts/pdf_to_pclm.py'),
+        path.resolve(process.cwd(), 'scripts/pdf_to_pclm.py'),
+        path.resolve(__dirname, '../scripts/pdf_to_pclm.py'),
+        path.resolve(__dirname, '../../src/scripts/pdf_to_pclm.py'),
+      ];
+      const scriptPath = scriptCandidates.find((p) => fs.existsSync(p)) || scriptCandidates[0];
+      const cmd = `"${pyBin}" "${scriptPath}" "${tempPdf}" "${tempPclm}" 300 "${job.paperSize || 'A4'}" "${job.orientation || 'AUTO'}"`;
 
-      await execAsync(cmd);
+      await execAsync(cmd, { timeout: 45000 });
 
       if (!fs.existsSync(tempPclm)) {
         throw new Error('Failed to generate PCLm print data for HP LaserJet');
       }
 
       const pclmBuffer = await fs.promises.readFile(tempPclm);
-      console.log(`[Dispatcher] Successfully generated PCLm stream: ${pclmBuffer.length} bytes @ 600 DPI`);
+      console.log(`[Dispatcher] Successfully generated PCLm stream: ${pclmBuffer.length} bytes @ 300 DPI`);
 
       // 4. Update status to SENT_TO_PRINTER
       const jobSent = await dbService.updateJob(jobId, {

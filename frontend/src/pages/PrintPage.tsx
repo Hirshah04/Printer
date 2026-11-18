@@ -235,10 +235,10 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
               <div className="flex items-center gap-2 text-xs font-mono text-slate-300 flex-wrap">
                 <span className="flex items-center gap-1.5">
                   <Wifi className="h-3.5 w-3.5 text-cyan-400" />
-                  <span>{printer?.lanIp || '103.209.67.76'}:631</span>
+                  <span>{printer?.lanIp || '103.209.67.76'}:9100</span>
                 </span>
                 <span className="text-cyan-400 font-bold">&bull;</span>
-                <span className="text-cyan-400 font-semibold">Native 600 DPI Laser PCLm</span>
+                <span className="text-cyan-400 font-semibold">Native Laser PCLm Stream</span>
               </div>
 
               {/* Sub-line 2: Pure Cloud */}
@@ -517,7 +517,7 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
             <div className="pt-4 border-t border-blue-500/20 flex flex-col sm:flex-row items-center justify-between gap-4">
               <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
                 <Crosshair className="h-4 w-4 text-cyan-400 shrink-0" />
-                <span>Target IP: {printer?.lanIp || '103.209.67.76'}:9100 - 600 DPI Laser Stream</span>
+                <span>Target IP: {printer?.lanIp || '103.209.67.76'}:9100 - Laser PCLm Stream</span>
               </div>
 
               <button
@@ -587,8 +587,8 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
                 done: ['QUEUED', 'PROCESSING', 'SENT_TO_PRINTER', 'PRINTER_ACCEPTED', 'PRINTING', 'COMPLETED'].includes(activeJob.status),
               },
               {
-                title: '2. 600 DPI PCLm',
-                desc: 'Raster swaths',
+                title: '2. Fast PCLm',
+                desc: 'A4 raster swaths',
                 active: ['PROCESSING', 'SENT_TO_PRINTER', 'PRINTER_ACCEPTED', 'PRINTING', 'COMPLETED'].includes(activeJob.status),
                 done: ['SENT_TO_PRINTER', 'PRINTER_ACCEPTED', 'PRINTING', 'COMPLETED'].includes(activeJob.status),
               },

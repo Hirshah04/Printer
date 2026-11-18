@@ -4,10 +4,11 @@
   "description": "Cloud Print Worker Service for Remote PDF Printing System",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node -e \"const fs = require('fs'); fs.cpSync('src/scripts', 'dist/scripts', {recursive: true});\"",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "postinstall": "pip3 install --break-system-packages pymupdf || pip install pymupdf || true"
   },
   "keywords": ["printing", "ipp", "worker", "pclm", "wireguard"],
   "author": "",

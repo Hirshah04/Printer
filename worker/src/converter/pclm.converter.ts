@@ -57,7 +57,7 @@ export class PCLmConverter {
     options: ConversionOptions = {}
   ): Promise<ConversionResult> {
     const paperSize = (options.paperSize || 'A4').toLowerCase();
-    const dpi = options.resolutionDpi || 600;
+    const dpi = options.resolutionDpi || 300;
     const orient = options.orientation || 'AUTO';
 
     const tempId = `print-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -68,12 +68,17 @@ export class PCLmConverter {
       await fs.promises.writeFile(inputPdfPath, pdfBuffer);
 
       const pyBin = process.platform === 'win32' ? 'python' : 'python3';
-      const scriptPath = fs.existsSync(path.resolve(process.cwd(), 'dist/scripts/pdf_to_pclm.py'))
-        ? path.resolve(process.cwd(), 'dist/scripts/pdf_to_pclm.py')
-        : path.resolve(process.cwd(), 'src/scripts/pdf_to_pclm.py');
+      const scriptCandidates = [
+        path.resolve(process.cwd(), 'dist/scripts/pdf_to_pclm.py'),
+        path.resolve(process.cwd(), 'src/scripts/pdf_to_pclm.py'),
+        path.resolve(process.cwd(), 'scripts/pdf_to_pclm.py'),
+        path.resolve(__dirname, '../scripts/pdf_to_pclm.py'),
+        path.resolve(__dirname, '../../src/scripts/pdf_to_pclm.py'),
+      ];
+      const scriptPath = scriptCandidates.find((p) => fs.existsSync(p)) || scriptCandidates[0];
       const cmd = `"${pyBin}" "${scriptPath}" "${inputPdfPath}" "${outputPclmPath}" ${dpi} "${paperSize.toUpperCase()}" "${orient}"`;
 
-      const { stdout, stderr } = await execAsync(cmd);
+      const { stdout, stderr } = await execAsync(cmd, { timeout: 45000 });
       if (stdout && stdout.trim()) console.log(`[PCLmConverter] ${stdout.trim()}`);
       if (stderr && stderr.trim()) console.warn(`[PCLmConverter] ${stderr.trim()}`);
 

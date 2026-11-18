@@ -229,13 +229,23 @@ class JsonDbService {
     const now = new Date().toISOString();
     job.updatedAt = now;
 
-    if (updates.status && updates.status !== job.status) {
-      job.status = updates.status;
-      job.statusHistory.push({
-        status: updates.status,
-        timestamp: now,
-        message: updates.message || `Status updated to ${updates.status}`,
-      });
+    if (updates.message) {
+      (job as any).message = updates.message;
+    }
+
+    if (updates.status) {
+      const isNewStatus = updates.status !== job.status;
+      if (isNewStatus) {
+        job.status = updates.status;
+      }
+
+      if (isNewStatus || updates.message) {
+        job.statusHistory.push({
+          status: job.status,
+          timestamp: now,
+          message: updates.message || `Status updated to ${job.status}`,
+        });
+      }
 
       if (updates.status === 'PRINTING' && !job.startedAt) {
         job.startedAt = now;

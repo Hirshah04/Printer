@@ -1,43 +1,79 @@
 import sys
 import os
 
-def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_size='A4', orientation='AUTO'):
+def generate_pclm(pdf_path, output_pclm_path, dpi=300, strip_height=512, paper_size='A4', orientation='AUTO'):
     """
     Generate 100% standard, hardware-compliant PCLm stream using MuPDF's native C engine.
-    Produces %PDF-1.4 %PCLm-1.0 conforming to HP LaserJet Pro MFP M126nw specifications in <0.05s.
+    Ensures strict A4 paper matching [0 0 595 842] so the HP LaserJet Pro MFP M126nw paper
+    feed mechanism never pauses on paper tray mismatch.
+    Produces %PDF-1.4 %PCLm-1.0 in <0.05s to 1s.
     """
+    import fitz
+
+    paper_upper = paper_size.upper()
+    if paper_upper == 'LETTER':
+        std_w, std_h = 612.0, 792.0
+    else:
+        # Standard ISO A4 (210 x 297 mm)
+        std_w, std_h = 595.0, 842.0
+
+    # 1. Normalize and fit each page to standard A4 sheet coordinates
+    temp_fitted_path = output_pclm_path + '.fitted.pdf'
+    src_doc = fitz.open(pdf_path)
+    fitted_doc = fitz.open()
+
+    for p in src_doc:
+        rect = p.rect
+        orient_upper = orientation.upper()
+        should_rotate = False
+        if orient_upper == 'LANDSCAPE' and rect.width < rect.height:
+            should_rotate = True
+        elif orient_upper == 'PORTRAIT' and rect.width > rect.height:
+            should_rotate = True
+        elif orient_upper == 'AUTO' and rect.width > rect.height:
+            should_rotate = True
+
+        new_page = fitted_doc.new_page(width=std_w, height=std_h)
+        if should_rotate:
+            new_page.show_pdf_page(new_page.rect, src_doc, p.number, rotate=90)
+        else:
+            new_page.show_pdf_page(new_page.rect, src_doc, p.number)
+
+    fitted_doc.save(temp_fitted_path)
+    fitted_doc.close()
+    src_doc.close()
+
+    # 2. Convert fitted A4 document to PCLm using MuPDF native C writer
     try:
         import pymupdf.mupdf as mupdf
         opts = f'strip-height={strip_height},compression=flate,resolution={dpi}'
         writer = mupdf.FzDocumentWriter(output_pclm_path, opts, mupdf.FzDocumentWriter.PathType_PCLM)
-        doc = mupdf.FzDocument(pdf_path)
+        doc = mupdf.FzDocument(temp_fitted_path)
         writer.fz_write_document(doc)
         writer.fz_close_document_writer()
+        del writer
+        del doc
+
+        if os.path.exists(temp_fitted_path):
+            try:
+                os.remove(temp_fitted_path)
+            except Exception:
+                pass
+
         file_size = os.path.getsize(output_pclm_path)
         print(f"Native MuPDF PCLm {dpi} DPI ({paper_size}) generated: {output_pclm_path} ({file_size} bytes)")
         return
     except Exception as e:
         print(f"Native MuPDF writer failed: {e}. Using pure-raster fallback...", file=sys.stderr)
 
-    # Fallback using standard PyMuPDF page rendering
-    import fitz
+    # 3. Fallback: Pure PyMuPDF rasterizer with zlib Flate compression
     import zlib
 
-    doc = fitz.open(pdf_path)
+    doc = fitz.open(temp_fitted_path)
     points_per_inch = 72.0
-    scale = points_per_inch / dpi
 
-    paper_upper = paper_size.upper()
-    if paper_upper == 'LETTER':
-        target_w = int(round(8.5 * dpi))
-        target_h = int(round(11.0 * dpi))
-        width_points = 612
-        height_points = 792
-    else:
-        target_w = int(round((210.0 / 25.4) * dpi))
-        target_h = int(round((297.0 / 25.4) * dpi))
-        width_points = 595
-        height_points = 842
+    target_w = int(round((std_w / points_per_inch) * dpi))
+    target_h = int(round((std_h / points_per_inch) * dpi))
 
     next_obj_num = 1
     def alloc_obj():
@@ -52,36 +88,12 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_s
 
     for page_idx in range(len(doc)):
         page = doc[page_idx]
-        orient_upper = orientation.upper()
-        if orient_upper == 'LANDSCAPE' and page.rect.width < page.rect.height:
-            page.set_rotation((page.rotation + 90) % 360)
-        elif orient_upper == 'PORTRAIT' and page.rect.width > page.rect.height:
-            page.set_rotation((page.rotation + 90) % 360)
-        elif orient_upper == 'AUTO' and page.rect.width > page.rect.height:
-            page.set_rotation((page.rotation + 90) % 360)
+        mat = fitz.Matrix(dpi / points_per_inch, dpi / points_per_inch)
+        pix = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
 
-        page_w_px = page.rect.width * (dpi / points_per_inch)
-        page_h_px = page.rect.height * (dpi / points_per_inch)
-        fit_x = target_w / page_w_px
-        fit_y = target_h / page_h_px
-        min_fit = min(fit_x, fit_y)
-        zoom = 1.0 if abs(min_fit - 1.0) < 0.03 else min(min_fit, 1.0)
-
-        mat = fitz.Matrix(zoom * (dpi / points_per_inch), zoom * (dpi / points_per_inch))
-        rendered_pix = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
-
-        canvas = fitz.Pixmap(fitz.csGRAY, fitz.IRect(0, 0, target_w, target_h), 0)
-        canvas.clear_with(255)
-
-        ox = max(0, (target_w - rendered_pix.width) // 2)
-        oy = max(0, (target_h - rendered_pix.height) // 2)
-        cw = min(rendered_pix.width, target_w - ox)
-        ch = min(rendered_pix.height, target_h - oy)
-        canvas.copy(rendered_pix, fitz.IRect(ox, oy, ox + cw, oy + ch))
-
-        width = target_w
-        height = target_h
-        raw_samples = canvas.samples
+        width = pix.width
+        height = pix.height
+        raw_samples = pix.samples
         row_stride = width
 
         page_obj_num = alloc_obj()
@@ -99,8 +111,8 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_s
                 'xobject_num': xobject_num,
                 'y_offset': y,
                 'height': curr_strip_h,
+                'width': width,
                 'data': compressed,
-                'width': width
             })
             y += curr_strip_h
             swath_idx += 1
@@ -108,21 +120,33 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_s
         page_records.append({
             'page_obj_num': page_obj_num,
             'content_obj_num': content_obj_num,
-            'width_points': width_points,
-            'height_points': height_points,
+            'swaths': swaths,
+            'width_points': std_w,
+            'height_points': std_h,
             'width_pixels': width,
             'height_pixels': height,
-            'scale': scale,
-            'swaths': swaths
         })
 
+    doc.close()
+    if os.path.exists(temp_fitted_path):
+        try:
+            os.remove(temp_fitted_path)
+        except Exception:
+            pass
+
+    # Assemble PCLm PDF document
     with open(output_pclm_path, 'wb') as f:
         offsets = {}
-        def write_str(s): f.write(s.encode('ascii'))
-        def write_obj_header(n):
-            offsets[n] = f.tell()
-            write_str(f"{n} 0 obj\n")
-        def write_obj_footer(): write_str("endobj\n")
+
+        def write_str(s):
+            f.write(s.encode('ascii'))
+
+        def write_obj_header(obj_num):
+            offsets[obj_num] = f.tell()
+            write_str(f"{obj_num} 0 obj\n")
+
+        def write_obj_footer():
+            write_str("endobj\n")
 
         write_str("%PDF-1.4\n%PCLm-1.0\n")
 
@@ -130,39 +154,42 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_s
         write_str(f"<<\n/Type /Catalog\n/Pages {pages_num} 0 R\n>>\n")
         write_obj_footer()
 
+        kids_refs = " ".join([f"{p['page_obj_num']} 0 R" for p in page_records])
         write_obj_header(pages_num)
-        kids_str = " ".join([f"{p['page_obj_num']} 0 R" for p in page_records])
-        write_str(f"<<\n/Type /Pages\n/Count {len(page_records)}\n/Kids [ {kids_str} ]\n>>\n")
+        write_str(f"<<\n/Type /Pages\n/Count {len(page_records)}\n/Kids [ {kids_refs} ]\n>>\n")
         write_obj_footer()
 
-        for p in page_records:
-            write_obj_header(p['page_obj_num'])
-            xobjects_dict = " ".join([f"/Image{s['idx']} {s['xobject_num']} 0 R" for s in p['swaths']])
+        for prec in page_records:
+            xobjects_dict = " ".join([f"/Image{s['idx']} {s['xobject_num']} 0 R" for s in prec['swaths']])
+            write_obj_header(prec['page_obj_num'])
             write_str(
                 f"<<\n/Type /Page\n"
                 f"/Parent {pages_num} 0 R\n"
+                f"/MediaBox [ 0 0 {prec['width_points']} {prec['height_points']} ]\n"
                 f"/Resources << /XObject << {xobjects_dict} >> >>\n"
-                f"/MediaBox [ 0 0 {p['width_points']} {p['height_points']} ]\n"
-                f"/Contents [ {p['content_obj_num']} 0 R ]\n>>\n"
+                f"/Contents {prec['content_obj_num']} 0 R\n>>\n"
             )
             write_obj_footer()
 
-            scale_str = f"{p['scale']:.6f}"
-            cs_parts = [f"{scale_str} 0 0 {scale_str} 0 0 cm\n"]
-            for s in p['swaths']:
-                page_y_offset = p['height_pixels'] - s['y_offset'] - s['height']
-                cs_parts.append("/P <</MCID 0>> BDC q\n")
-                cs_parts.append(f"{p['width_pixels']} 0 0 {s['height']} 0 {page_y_offset} cm\n")
-                cs_parts.append(f"/Image{s['idx']} Do Q\n")
+            content_stream_parts = []
+            for s in prec['swaths']:
+                scale_y = (s['height'] / prec['height_pixels']) * prec['height_points']
+                trans_y = prec['height_points'] - ((s['y_offset'] + s['height']) / prec['height_pixels']) * prec['height_points']
+                content_stream_parts.append(
+                    f"q\n"
+                    f"{prec['width_points']:.2f} 0 0 {scale_y:.2f} 0 {trans_y:.2f} cm\n"
+                    f"/Image{s['idx']} Do\n"
+                    f"Q\n"
+                )
+            content_data = "".join(content_stream_parts).encode('ascii')
 
-            content_bytes = "".join(cs_parts).encode('ascii')
-            write_obj_header(p['content_obj_num'])
-            write_str(f"<<\n/Length {len(content_bytes)}\n>>\nstream\n")
-            f.write(content_bytes)
+            write_obj_header(prec['content_obj_num'])
+            write_str(f"<< /Length {len(content_data)} >>\nstream\n")
+            f.write(content_data)
             write_str("\nendstream\n")
             write_obj_footer()
 
-            for s in p['swaths']:
+            for s in prec['swaths']:
                 write_obj_header(s['xobject_num'])
                 write_str(
                     f"<<\n/Type /XObject\n"
@@ -194,7 +221,7 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_s
 if __name__ == '__main__':
     pdf = sys.argv[1]
     out = sys.argv[2]
-    dpi = int(sys.argv[3]) if len(sys.argv) > 3 else 600
+    dpi = int(sys.argv[3]) if len(sys.argv) > 3 else 300
     paper = sys.argv[4] if len(sys.argv) > 4 else 'A4'
     orient = sys.argv[5] if len(sys.argv) > 5 else 'AUTO'
     generate_pclm(pdf, out, dpi=dpi, paper_size=paper, orientation=orient)
