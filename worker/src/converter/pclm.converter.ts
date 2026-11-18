@@ -9,6 +9,7 @@ const execAsync = promisify(exec);
 export interface ConversionOptions {
   paperSize?: 'A4' | 'Letter';
   resolutionDpi?: number;
+  orientation?: 'PORTRAIT' | 'LANDSCAPE' | 'AUTO';
   colorModel?: 'gray' | 'color';
 }
 
@@ -57,22 +58,24 @@ export class PCLmConverter {
   ): Promise<ConversionResult> {
     const paperSize = (options.paperSize || 'A4').toLowerCase();
     const dpi = options.resolutionDpi || 600;
-    const gs = await this.findGhostscript();
+    const orient = options.orientation || 'AUTO';
+
+    const tempId = `print-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const inputPdfPath = path.join(os.tmpdir(), `${tempId}.pdf`);
+    const outputPclmPath = path.join(os.tmpdir(), `${tempId}.pclm`);
 
     try {
-      const tempId = `print-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-      const inputPdfPath = path.join(os.tmpdir(), `${tempId}.pdf`);
-      const outputPclmPath = path.join(os.tmpdir(), `${tempId}.pclm`);
-
       await fs.promises.writeFile(inputPdfPath, pdfBuffer);
 
       const pyBin = process.platform === 'win32' ? 'python' : 'python3';
       const scriptPath = fs.existsSync(path.resolve(process.cwd(), 'dist/scripts/pdf_to_pclm.py'))
         ? path.resolve(process.cwd(), 'dist/scripts/pdf_to_pclm.py')
         : path.resolve(process.cwd(), 'src/scripts/pdf_to_pclm.py');
-      const cmd = `"${pyBin}" "${scriptPath}" "${inputPdfPath}" "${outputPclmPath}" ${dpi} "${paperSize.toUpperCase()}"`;
+      const cmd = `"${pyBin}" "${scriptPath}" "${inputPdfPath}" "${outputPclmPath}" ${dpi} "${paperSize.toUpperCase()}" "${orient}"`;
 
-      await execAsync(cmd);
+      const { stdout, stderr } = await execAsync(cmd);
+      if (stdout && stdout.trim()) console.log(`[PCLmConverter] ${stdout.trim()}`);
+      if (stderr && stderr.trim()) console.warn(`[PCLmConverter] ${stderr.trim()}`);
 
       if (fs.existsSync(outputPclmPath)) {
         const pclmBuffer = await fs.promises.readFile(outputPclmPath);
@@ -87,17 +90,15 @@ export class PCLmConverter {
           buffer: pclmBuffer,
           methodUsed: `PyMuPDF native PCLm rasterizer @ ${dpi}dpi (${paperSize.toUpperCase()})`,
         };
+      } else {
+        throw new Error(`PCLm output file was not created: ${outputPclmPath}`);
       }
     } catch (err: any) {
-      console.warn(`[PCLmConverter] Python PCLm conversion error: ${err.message}.`);
+      console.error(`[PCLmConverter] PCLm conversion error: ${err.message}`);
+      fs.promises.unlink(inputPdfPath).catch(() => {});
+      fs.promises.unlink(outputPclmPath).catch(() => {});
+      throw new Error(`PCLm rasterization failed: ${err.message}. HP LaserJet Pro MFP M126nw cannot print raw PDF.`);
     }
-
-    return {
-      success: true,
-      format: 'application/PCLm',
-      buffer: pdfBuffer,
-      methodUsed: 'PCLm Container Stream Fallback',
-    };
   }
 
   /**

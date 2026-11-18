@@ -3,12 +3,12 @@ import os
 import zlib
 import fitz # PyMuPDF
 
-def generate_pclm(pdf_path, output_pclm_path, dpi=300, strip_height=128, paper_size='A4', orientation='AUTO'):
+def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_size='A4', orientation='AUTO'):
     doc = fitz.open(pdf_path)
     points_per_inch = 72.0
     scale = points_per_inch / dpi
 
-    # Exact physical dimensions at target DPI (default 300 DPI for fast laser throughput & low memory)
+    # Exact physical dimensions at target DPI (default 600 DPI required by HP LaserJet hardware)
     paper_upper = paper_size.upper()
     if paper_upper == 'LETTER':
         target_w = int(round(8.5 * dpi))   # 2550 @ 300 DPI
@@ -168,7 +168,9 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=300, strip_height=128, paper_s
                 f"/MediaBox [ 0 0 {p['width_points']} {p['height_points']} ]\n"
                 f"/Contents [ {p['content_obj_num']} 0 R ]\n"
                 f"/PCLmPageStripHeight {strip_height}\n"
-                f"/PCLmPageStripType /FlateDecode\n>>\n"
+                f"/PCLmStripHeight {strip_height}\n"
+                f"/PCLmPageStripType /FlateDecode\n"
+                f"/PCLmSourceResolution {dpi}\n>>\n"
             )
             write_obj_footer()
 
@@ -181,7 +183,7 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=300, strip_height=128, paper_s
                 page_y_offset = p['height_pixels'] - s['y_offset'] - s['height']
                 cs_parts.append("/P <</MCID 0>> BDC q\n")
                 cs_parts.append(f"{p['width_pixels']} 0 0 {s['height']} 0 {page_y_offset} cm\n")
-                cs_parts.append(f"/Image{s['idx']} Do Q\n")
+                cs_parts.append(f"/Image{s['idx']} Do Q EMC\n")
 
             content_bytes = "".join(cs_parts).encode('ascii')
 
@@ -229,7 +231,7 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=300, strip_height=128, paper_s
 if __name__ == '__main__':
     pdf = sys.argv[1]
     out = sys.argv[2]
-    dpi = int(sys.argv[3]) if len(sys.argv) > 3 else 300
+    dpi = int(sys.argv[3]) if len(sys.argv) > 3 else 600
     paper = sys.argv[4] if len(sys.argv) > 4 else 'A4'
     orient = sys.argv[5] if len(sys.argv) > 5 else 'AUTO'
     generate_pclm(pdf, out, dpi=dpi, paper_size=paper, orientation=orient)
