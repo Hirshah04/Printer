@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import net from 'net';
 import { dbService } from '../services/db.service.js';
 import { ippService } from '../services/ipp.service.js';
 import { sseService } from '../services/sse.service.js';
@@ -88,4 +89,45 @@ export async function testConnection(req: Request, res: Response): Promise<void>
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
+}
+
+export async function testRawPort(req: Request, res: Response): Promise<void> {
+  const printer = dbService.getPrinter();
+  const host = printer.lanIp || '103.209.67.76';
+  const port = 9100;
+  const socket = new net.Socket();
+  const t0 = Date.now();
+  let done = false;
+
+  socket.setTimeout(6000);
+  socket.connect(port, host, () => {
+    if (!done) {
+      done = true;
+      const elapsed = Date.now() - t0;
+      socket.destroy();
+      res.json({ success: true, reachable: true, host, port, elapsedMs: elapsed });
+    }
+  });
+
+  socket.on('timeout', () => {
+    if (!done) {
+      done = true;
+      socket.destroy();
+      res.json({
+        success: false,
+        reachable: false,
+        host,
+        port,
+        error: `Connection timed out after 6000ms. Port ${port} is NOT open/forwarded on the router at ${host}.`,
+      });
+    }
+  });
+
+  socket.on('error', (err) => {
+    if (!done) {
+      done = true;
+      socket.destroy();
+      res.json({ success: false, reachable: false, host, port, error: err.message });
+    }
+  });
 }
