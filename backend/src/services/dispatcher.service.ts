@@ -224,10 +224,11 @@ export class DispatcherService {
       // It only accepts @PJL ENTER LANGUAGE = PCLm and @PJL RESET.
       const pjlHeader = Buffer.from(
         '\x1b%-12345X@PJL\r\n' +
+        '@PJL JOB\r\n' +
         '@PJL ENTER LANGUAGE = PCLm\r\n',
         'ascii'
       );
-      const pjlFooter = Buffer.from('\r\n\x1b%-12345X@PJL\r\n@PJL RESET\r\n\x1b%-12345X', 'ascii');
+      const pjlFooter = Buffer.from('\r\n\x1b%-12345X@PJL\r\n@PJL EOJ\r\n\x1b%-12345X', 'ascii');
       const payload = Buffer.concat([pjlHeader, data, pjlFooter]);
 
       let finished = false;

@@ -237,8 +237,28 @@ export class JobConsumer {
           }
         );
       } else {
-        // For RAW Port 9100 streaming, wait for printer mechanism to finish feeding
-        await new Promise((r) => setTimeout(r, 6000));
+        // For RAW Port 9100 streaming: poll IPP to verify printer processed stream and returned to IDLE
+        let verified = false;
+        const pollStart = Date.now();
+        await new Promise((r) => setTimeout(r, 4000));
+        while (Date.now() - pollStart < 35000) {
+          const status = await ippClient.queryPrinterState(targetLanIp, targetPort, targetEndpoint);
+          if (status) {
+            if (status.state === 'STOPPED' || status.stateReasons?.some((r: string) => r.includes('error') || r.includes('spool-area-full'))) {
+              throw new Error(`Printer hardware reported error: ${status.stateReasons?.join(', ') || 'Processing error'}`);
+            }
+            if (status.state === 'IDLE') {
+              verified = true;
+              break;
+            }
+          }
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+
+        if (!verified) {
+          throw new Error('Printer did not confirm completion within timeout period.');
+        }
+
         await this.updateStatus(
           jobId,
           'COMPLETED',
@@ -247,7 +267,7 @@ export class JobConsumer {
           undefined,
           {
             verifiedAt: new Date(),
-            evidence: 'PCLm 600 DPI stream with PJL wrapper delivered to hardware Port 9100.',
+            evidence: 'PCLm 600 DPI stream with PJL wrapper delivered to hardware Port 9100 and confirmed IDLE.',
             finalPrinterState: 'IDLE',
             sheetsPrinted: job.pageCount * (job.copies || 1),
           }
@@ -281,10 +301,11 @@ export class JobConsumer {
       // It only accepts @PJL ENTER LANGUAGE = PCLm and @PJL RESET.
       const pjlHeader = Buffer.from(
         '\x1b%-12345X@PJL\r\n' +
+        '@PJL JOB\r\n' +
         '@PJL ENTER LANGUAGE = PCLm\r\n',
         'ascii'
       );
-      const pjlFooter = Buffer.from('\r\n\x1b%-12345X@PJL\r\n@PJL RESET\r\n\x1b%-12345X', 'ascii');
+      const pjlFooter = Buffer.from('\r\n\x1b%-12345X@PJL\r\n@PJL EOJ\r\n\x1b%-12345X', 'ascii');
       const payload = Buffer.concat([pjlHeader, data, pjlFooter]);
 
       let finished = false;

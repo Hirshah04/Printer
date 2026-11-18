@@ -216,7 +216,7 @@ export class IPPClient {
   /**
    * Helper to query general printer state
    */
-  private async queryPrinterState(lanIp: string, port = 631, endpoint = '/ipp/printer'): Promise<{ state: string } | null> {
+  async queryPrinterState(lanIp: string, port = 631, endpoint = '/ipp/printer'): Promise<{ state: string; stateReasons?: string[] } | null> {
     const printerUri = `http://${lanIp}:${port}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
     return new Promise((resolve) => {
       try {
@@ -224,15 +224,17 @@ export class IPPClient {
         const msg = {
           'operation-attributes-tag': {
             'requesting-user-name': 'remote-print-worker',
-            'requested-attributes': ['printer-state'],
+            'requested-attributes': ['printer-state', 'printer-state-reasons'],
           },
         };
         printer.execute('Get-Printer-Attributes', msg, (err: any, res: any) => {
           if (err || !res || !res['printer-attributes-tag']) resolve(null);
           else {
             const raw = res['printer-attributes-tag']['printer-state'];
-            const state = raw === 3 || raw === 'idle' ? 'IDLE' : 'BUSY';
-            resolve({ state });
+            const rawReasons = res['printer-attributes-tag']['printer-state-reasons'];
+            const state = raw === 3 || raw === 'idle' ? 'IDLE' : raw === 5 || raw === 'stopped' ? 'STOPPED' : 'BUSY';
+            const stateReasons = Array.isArray(rawReasons) ? rawReasons : rawReasons ? [String(rawReasons)] : [];
+            resolve({ state, stateReasons });
           }
         });
       } catch {
