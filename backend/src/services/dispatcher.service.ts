@@ -83,56 +83,65 @@ export class DispatcherService {
       });
       if (jobSent) sseService.broadcastJobUpdate(jobSent);
 
-      // Attempt Primary Protocol: IPP Print-Job
+      // Attempt Primary Protocol: Direct HP JetDirect RAW Port 9100 with PJL wrapper
+      // HP LaserJet Pro MFP M126nw is a host-based printer; streaming to Port 9100 avoids the IPP "spool-area-full" buffer overflow.
       let printerJobId = '';
-      let isSubmittedViaIpp = false;
+      let isSubmitted = false;
+      let methodUsed = '';
 
       try {
-        const ippPrinter = ipp.Printer(printerUri);
-        const media = job.paperSize === 'Letter' ? 'na_letter_8.5x11in' : 'iso_a4_210x297mm';
-
-        const printMsg: any = {
-          'operation-attributes-tag': {
-            'requesting-user-name': 'AirPrintHub',
-            'job-name': job.documentName,
-            'document-format': 'application/PCLm',
-          },
-          'job-attributes-tag': {
-            copies: job.copies || 1,
-            media,
-            'orientation-requested': job.orientation === 'LANDSCAPE' ? 4 : 3, // 3 = Portrait, 4 = Landscape
-          },
-          data: pclmBuffer,
-        };
-
-        const submitRes: any = await new Promise((resolve, reject) => {
-          const timeout = setTimeout(() => reject(new Error('IPP connection timed out')), 120000);
-          ippPrinter.execute('Print-Job', printMsg, (err: any, res: any) => {
-            clearTimeout(timeout);
-            if (err) reject(err);
-            else resolve(res);
-          });
-        });
-
-        const statusStr = String(submitRes?.statusCode || '').toLowerCase();
-        if (submitRes?.statusCode === 0 || statusStr.includes('successful') || submitRes?.['job-attributes-tag']?.['job-id']) {
-          printerJobId = String(submitRes['job-attributes-tag']?.['job-id'] || '');
-          isSubmittedViaIpp = true;
-          console.log(`[Dispatcher] Print job accepted via IPP! Job ID: #${printerJobId}`);
-        } else {
-          console.warn(`[Dispatcher] IPP rejected submission (${submitRes?.statusCode}). Falling back to RAW port 9100.`);
-        }
-      } catch (ippErr: any) {
-        console.warn(`[Dispatcher] IPP submission failed: ${ippErr.message}. Attempting direct RAW port 9100 fallback.`);
-      }
-
-      // If IPP failed, fallback to RAW Port 9100 with PJL wrapper
-      if (!isSubmittedViaIpp) {
         const rawPort = config.printer.rawPort || 9100;
         console.log(`[Dispatcher] Streaming directly to HP JetDirect RAW port ${rawPort} on ${printerIp}...`);
-        await this.streamToRawPort(printerIp, rawPort, pclmBuffer, job.documentName, job.paperSize || 'A4', job.copies || 1);
+        await this.streamToRawPort(printerIp, rawPort, pclmBuffer, job.documentName, 'A4', job.copies || 1);
         printerJobId = `RAW-${Date.now().toString().slice(-4)}`;
+        isSubmitted = true;
+        methodUsed = 'RAW Port 9100';
         console.log(`[Dispatcher] RAW stream successfully sent to ${printerIp}:${rawPort}!`);
+      } catch (rawErr: any) {
+        console.warn(`[Dispatcher] RAW Port 9100 streaming failed: ${rawErr.message}. Falling back to IPP Print-Job.`);
+      }
+
+      // Secondary Fallback: IPP Print-Job (Port 631)
+      if (!isSubmitted) {
+        try {
+          const ippPrinter = ipp.Printer(printerUri);
+          const media = 'iso_a4_210x297mm';
+
+          const printMsg: any = {
+            'operation-attributes-tag': {
+              'requesting-user-name': 'AirPrintHub',
+              'job-name': job.documentName,
+              'document-format': 'application/PCLm',
+            },
+            'job-attributes-tag': {
+              copies: job.copies || 1,
+              media,
+              'orientation-requested': job.orientation === 'LANDSCAPE' ? 4 : 3,
+            },
+            data: pclmBuffer,
+          };
+
+          const submitRes: any = await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('IPP connection timed out')), 120000);
+            ippPrinter.execute('Print-Job', printMsg, (err: any, res: any) => {
+              clearTimeout(timeout);
+              if (err) reject(err);
+              else resolve(res);
+            });
+          });
+
+          const statusStr = String(submitRes?.statusCode || '').toLowerCase();
+          if (submitRes?.statusCode === 0 || statusStr.includes('successful') || submitRes?.['job-attributes-tag']?.['job-id']) {
+            printerJobId = String(submitRes['job-attributes-tag']?.['job-id'] || '');
+            isSubmitted = true;
+            methodUsed = `IPP Job #${printerJobId}`;
+            console.log(`[Dispatcher] Print job accepted via IPP! Job ID: #${printerJobId}`);
+          } else {
+            throw new Error(`IPP rejected submission (${submitRes?.statusCode})`);
+          }
+        } catch (ippErr: any) {
+          throw new Error(`Both RAW Port 9100 and IPP failed: ${ippErr.message}`);
+        }
       }
 
       const ackTime = new Date().toISOString();
@@ -140,7 +149,7 @@ export class DispatcherService {
       // 5. Update status: PRINTER_ACCEPTED
       const jobAccepted = await dbService.updateJob(jobId, {
         status: 'PRINTER_ACCEPTED',
-        message: `Accepted by HP LaserJet M126nw (${isSubmittedViaIpp ? `IPP Job #${printerJobId}` : 'RAW Port 9100'})`,
+        message: `Accepted by HP LaserJet M126nw (${methodUsed})`,
         printerJobId,
         printerIPPJobId: printerJobId,
         lastAcknowledgementAt: ackTime,
@@ -157,7 +166,7 @@ export class DispatcherService {
       if (jobPrinting) sseService.broadcastJobUpdate(jobPrinting);
 
       // 7. Track completion strictly according to Rule 17.D and Section 8
-      if (isSubmittedViaIpp && printerJobId) {
+      if (methodUsed.includes('IPP') && printerJobId) {
         const ippPrinter = ipp.Printer(printerUri);
         await this.trackJobUntilFinished(ippPrinter, printerJobId, jobId, job.documentName);
       } else {
