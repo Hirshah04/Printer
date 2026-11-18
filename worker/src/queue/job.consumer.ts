@@ -132,12 +132,12 @@ export class JobConsumer {
         console.warn(`[Worker] Windows driver print failed, falling back to direct network protocols.`);
       }
 
-      // 3. Fallback: Convert PDF to native HP LaserJet PCLm stream at 600 DPI
-      await this.updateStatus(jobId, 'PROCESSING', 'Converting document to HP PCLm raster stream at 600 DPI...');
+      // 3. Fallback: Convert PDF to native HP LaserJet PCLm stream at 300 DPI
+      await this.updateStatus(jobId, 'PROCESSING', 'Converting document to HP PCLm raster stream at 300 DPI...');
 
       const conversion = await pclmConverter.convertPdfToPclm(pdfBuffer, {
         paperSize: job.paperSize || 'A4',
-        resolutionDpi: 600,
+        resolutionDpi: 300,
       });
 
       const targetLanIp = printer?.lanIp || config.defaultPrinterIp;

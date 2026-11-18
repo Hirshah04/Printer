@@ -3,20 +3,21 @@ import os
 import zlib
 import fitz # PyMuPDF
 
-def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_size='A4'):
+def generate_pclm(pdf_path, output_pclm_path, dpi=300, strip_height=128, paper_size='A4', orientation='AUTO'):
     doc = fitz.open(pdf_path)
     points_per_inch = 72.0
     scale = points_per_inch / dpi
 
-    # Exact physical dimensions at 600 DPI
-    if paper_size.upper() == 'LETTER':
-        target_w = int(round(8.5 * dpi))   # 5100
-        target_h = int(round(11.0 * dpi))  # 6600
+    # Exact physical dimensions at target DPI (default 300 DPI for fast laser throughput & low memory)
+    paper_upper = paper_size.upper()
+    if paper_upper == 'LETTER':
+        target_w = int(round(8.5 * dpi))   # 2550 @ 300 DPI
+        target_h = int(round(11.0 * dpi))  # 3300 @ 300 DPI
         width_points = 612
         height_points = 792
-    else: # Default A4
-        target_w = 4960
-        target_h = 7016
+    else: # Default A4 (210 x 297 mm)
+        target_w = int(round((210.0 / 25.4) * dpi))  # 2480 @ 300 DPI
+        target_h = int(round((297.0 / 25.4) * dpi))  # 3508 @ 300 DPI
         width_points = 595
         height_points = 842
 
@@ -37,31 +38,50 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_s
     for page_idx in range(len(doc)):
         page = doc[page_idx]
 
-        # Auto-rotate landscape documents so they fit the printer's portrait paper feed
-        if page.rect.width > page.rect.height:
-            page.set_rotation((page.rotation + 90) % 360)
+        # Orientation handling:
+        # HP LaserJet feeds paper portrait (narrow side first).
+        # Landscape documents must be rotated 90 degrees to fit the sheet.
+        orient_upper = orientation.upper()
+        if orient_upper == 'LANDSCAPE':
+            if page.rect.width < page.rect.height:
+                page.set_rotation((page.rotation + 90) % 360)
+        elif orient_upper == 'PORTRAIT':
+            if page.rect.width > page.rect.height:
+                page.set_rotation((page.rotation + 90) % 360)
+        else: # AUTO
+            if page.rect.width > page.rect.height:
+                page.set_rotation((page.rotation + 90) % 360)
 
-        # Scale page to fit cleanly within the target page boundaries with a 2% printable margin
-        margin_factor = 0.96
-        usable_w = target_w * margin_factor
-        usable_h = target_h * margin_factor
+        # Scale calculation:
+        # If document already matches standard target paper (within 3%), preserve exact 1:1 (100%) scale.
+        page_w_px = page.rect.width * (dpi / points_per_inch)
+        page_h_px = page.rect.height * (dpi / points_per_inch)
 
-        zoom_x = usable_w / (page.rect.width * (dpi / points_per_inch))
-        zoom_y = usable_h / (page.rect.height * (dpi / points_per_inch))
-        zoom = min(zoom_x, zoom_y, 1.0) # Do not upscale beyond 100%
+        fit_x = target_w / page_w_px
+        fit_y = target_h / page_h_px
+        min_fit = min(fit_x, fit_y)
+
+        # If it's already within 3% of the target page, render at 1:1 scale
+        if abs(min_fit - 1.0) < 0.03:
+            zoom = 1.0
+        elif min_fit < 1.0:
+            # Document is larger than target paper: scale down cleanly to fit without cropping
+            zoom = min_fit
+        else:
+            # Document is smaller than paper: fit proportionally without over-stretching
+            zoom = min(min_fit, 1.0)
 
         mat = fitz.Matrix(zoom * (dpi / points_per_inch), zoom * (dpi / points_per_inch))
         rendered_pix = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
 
-        # Create full exact target page canvas (pure white)
+        # Create exact target page canvas (pure white: 255)
         canvas = fitz.Pixmap(fitz.csGRAY, fitz.IRect(0, 0, target_w, target_h), 0)
-        canvas.clear_with(255) # 255 = White
+        canvas.clear_with(255)
 
-        # Center the rendered page on the sheet
+        # Center the rendered page accurately on the physical sheet
         ox = max(0, (target_w - rendered_pix.width) // 2)
         oy = max(0, (target_h - rendered_pix.height) // 2)
 
-        # Copy pixels into centered position
         cw = min(rendered_pix.width, target_w - ox)
         ch = min(rendered_pix.height, target_h - oy)
         canvas.copy(rendered_pix, fitz.IRect(ox, oy, ox + cw, oy + ch))
@@ -74,7 +94,7 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_s
         page_obj_num = alloc_obj()
         content_obj_num = alloc_obj()
 
-        # Split into swaths of exact strip_height (128 rows)
+        # Split into swaths of exact strip_height (128 rows for standard PCLm)
         swaths = []
         y = 0
         swath_idx = 0
@@ -146,21 +166,22 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_s
                 f"/Parent {pages_num} 0 R\n"
                 f"/Resources << /XObject << {xobjects_dict} >> >>\n"
                 f"/MediaBox [ 0 0 {p['width_points']} {p['height_points']} ]\n"
-                f"/Contents [ {p['content_obj_num']} 0 R ]\n>>\n"
+                f"/Contents [ {p['content_obj_num']} 0 R ]\n"
+                f"/PCLmPageStripHeight {strip_height}\n"
+                f"/PCLmPageStripType /FlateDecode\n>>\n"
             )
             write_obj_footer()
 
-            # Content Stream with clean standard PDF operators matching Windows PCLm spec
+            # Content Stream conforming to Wi-Fi Direct / Mopria PCLm standard
             scale_str = f"{p['scale']:.6f}"
             cs_parts = []
             cs_parts.append(f"{scale_str} 0 0 {scale_str} 0 0 cm\n")
 
             for s in p['swaths']:
                 page_y_offset = p['height_pixels'] - s['y_offset'] - s['height']
-                cs_parts.append("q\n")
+                cs_parts.append("/P <</MCID 0>> BDC q\n")
                 cs_parts.append(f"{p['width_pixels']} 0 0 {s['height']} 0 {page_y_offset} cm\n")
-                cs_parts.append(f"/Image{s['idx']} Do\n")
-                cs_parts.append("Q\n")
+                cs_parts.append(f"/Image{s['idx']} Do Q\n")
 
             content_bytes = "".join(cs_parts).encode('ascii')
 
@@ -203,11 +224,12 @@ def generate_pclm(pdf_path, output_pclm_path, dpi=600, strip_height=128, paper_s
             f"startxref\n{xref_offset}\n%%EOF\n"
         )
 
-    print(f"PCLm 600 DPI ({paper_size}) generated: {output_pclm_path} ({os.path.getsize(output_pclm_path)} bytes)")
+    print(f"PCLm {dpi} DPI ({paper_size}) generated: {output_pclm_path} ({os.path.getsize(output_pclm_path)} bytes)")
 
 if __name__ == '__main__':
     pdf = sys.argv[1]
     out = sys.argv[2]
-    dpi = int(sys.argv[3]) if len(sys.argv) > 3 else 600
+    dpi = int(sys.argv[3]) if len(sys.argv) > 3 else 300
     paper = sys.argv[4] if len(sys.argv) > 4 else 'A4'
-    generate_pclm(pdf, out, dpi=dpi, paper_size=paper)
+    orient = sys.argv[5] if len(sys.argv) > 5 else 'AUTO'
+    generate_pclm(pdf, out, dpi=dpi, paper_size=paper, orientation=orient)

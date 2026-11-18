@@ -70,7 +70,7 @@ export class PCLmConverter {
       const scriptPath = fs.existsSync(path.resolve(process.cwd(), 'dist/scripts/pdf_to_pclm.py'))
         ? path.resolve(process.cwd(), 'dist/scripts/pdf_to_pclm.py')
         : path.resolve(process.cwd(), 'src/scripts/pdf_to_pclm.py');
-      const cmd = `"${pyBin}" "${scriptPath}" "${inputPdfPath}" "${outputPclmPath}" 600`;
+      const cmd = `"${pyBin}" "${scriptPath}" "${inputPdfPath}" "${outputPclmPath}" ${dpi} "${paperSize.toUpperCase()}"`;
 
       await execAsync(cmd);
 

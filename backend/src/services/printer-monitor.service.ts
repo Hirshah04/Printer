@@ -342,12 +342,44 @@ export class PrinterMonitorService {
           }
         } else {
           // HP LaserJet purges completed jobs from memory immediately upon finishing.
-          // If the job is no longer found in the printer job table and printer is IDLE,
-          // the physical printing has concluded. Mark job COMPLETED.
+          // If the job is no longer found in the printer job table and printer is IDLE without errors,
+          // the physical printing has concluded.
           const printerState = dbService.getPrinter();
           const jobAgeMs = Date.now() - new Date(job.startedAt || job.createdAt).getTime();
 
-          if (jobAgeMs > 15000 && (printerState.currentStatus === 'IDLE' || (printerState.queuedJobCount || 0) === 0)) {
+          // Check if printer has any active hardware errors
+          const errorMap: Record<string, string> = {
+            'media-empty-report': 'Printer is out of paper. Please load paper into the input tray.',
+            'media-empty': 'Printer is out of paper. Please load paper into the input tray.',
+            'media-jam-report': 'Paper jam detected in the printer mechanism.',
+            'media-jam': 'Paper jam detected in the printer mechanism.',
+            'cover-open-report': 'Printer door or toner cartridge cover is open.',
+            'door-open': 'Printer door or toner cartridge cover is open.',
+            'spool-area-full-report': 'Printer memory / spool area is full. Waiting for current jobs to clear.',
+            'spool-area-full': 'Printer memory / spool area is full.',
+            'toner-empty-report': 'Toner cartridge is empty and must be replaced.',
+            'toner-empty': 'Toner cartridge is empty.',
+            'toner-missing-report': 'Toner cartridge is not installed.',
+          };
+
+          const activeErrors = (printerState.stateReasons || []).filter(
+            (r: string) => r && r !== 'none' && !r.includes('low') && errorMap[r]
+          );
+
+          if (activeErrors.length > 0) {
+            const errorMsg = activeErrors.map((r: string) => errorMap[r] || r).join('; ');
+            console.warn(`[PrinterMonitor] Job #${ippJobIdNum} failed due to printer error: ${errorMsg}`);
+            const updated = await dbService.updateJob(job._id, {
+              status: 'FAILED',
+              printerJobState: 'aborted',
+              completionVerified: false,
+              failedAt: nowIso,
+              lastAcknowledgementAt: nowIso,
+              printerError: errorMsg,
+              message: errorMsg,
+            });
+            if (updated) sseService.broadcastJobUpdate(updated);
+          } else if (jobAgeMs > 15000 && (printerState.currentStatus === 'IDLE' || (printerState.queuedJobCount || 0) === 0)) {
             console.log(`[PrinterMonitor] Job #${ippJobIdNum} completed and purged from printer memory. Marking COMPLETED.`);
             const updated = await dbService.updateJob(job._id, {
               status: 'COMPLETED',

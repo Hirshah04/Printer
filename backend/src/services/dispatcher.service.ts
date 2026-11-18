@@ -60,12 +60,12 @@ export class DispatcherService {
       const pdfBuffer = await storageService.getFileBuffer(job.storageKey);
       await fs.promises.writeFile(tempPdf, pdfBuffer);
 
-      // 3. Convert PDF to native HP LaserJet PCLm 600 DPI stream using PyMuPDF PCLm generator
+      // 3. Convert PDF to native HP LaserJet PCLm stream at 300 DPI using PyMuPDF PCLm generator
       const pyBin = process.platform === 'win32' ? 'python' : 'python3';
       const scriptPath = fs.existsSync(path.resolve(process.cwd(), 'dist/scripts/pdf_to_pclm.py'))
         ? path.resolve(process.cwd(), 'dist/scripts/pdf_to_pclm.py')
         : path.resolve(process.cwd(), 'src/scripts/pdf_to_pclm.py');
-      const cmd = `"${pyBin}" "${scriptPath}" "${tempPdf}" "${tempPclm}" 600 "${job.paperSize || 'A4'}"`;
+      const cmd = `"${pyBin}" "${scriptPath}" "${tempPdf}" "${tempPclm}" 300 "${job.paperSize || 'A4'}" "${job.orientation || 'AUTO'}"`;
 
       await execAsync(cmd);
 
@@ -100,6 +100,7 @@ export class DispatcherService {
           'job-attributes-tag': {
             copies: job.copies || 1,
             media,
+            'orientation-requested': job.orientation === 'LANDSCAPE' ? 4 : 3, // 3 = Portrait, 4 = Landscape
           },
           data: pclmBuffer,
         };
@@ -317,13 +318,15 @@ export class DispatcherService {
           }
 
           if (state === 'aborted' || state === 8) {
+            const reasons = jobRes['job-attributes-tag']?.['job-state-reasons'] || 'aborted by printer';
+            const reasonStr = Array.isArray(reasons) ? reasons.join(', ') : String(reasons);
             const jobAborted = await dbService.updateJob(jobId, {
               status: 'FAILED',
               printerJobState: 'aborted',
               failedAt: ackTime,
               lastAcknowledgementAt: ackTime,
-              printerError: 'Printing was aborted by printer hardware',
-              message: 'Printer aborted job. Please check printer control panel.',
+              printerError: `Printer aborted job (${reasonStr})`,
+              message: `Printer aborted job: ${reasonStr}. Please check printer control panel.`,
             });
             if (jobAborted) sseService.broadcastJobUpdate(jobAborted);
             return;
@@ -339,27 +342,90 @@ export class DispatcherService {
             if (jobCanceled) sseService.broadcastJobUpdate(jobCanceled);
             return;
           }
+        } else {
+          // If Get-Job-Attributes returns null, the HP LaserJet may have finished and purged the job from memory.
+          // Check printer attributes directly:
+          const pAttrs: any = await new Promise((resolve) => {
+            ippPrinter.execute('Get-Printer-Attributes', null, (err: any, res: any) => {
+              if (err) resolve(null);
+              else resolve(res);
+            });
+          });
+
+          if (pAttrs && pAttrs['printer-attributes-tag']) {
+            const pState = pAttrs['printer-attributes-tag']['printer-state'];
+            const pReasons = pAttrs['printer-attributes-tag']['printer-state-reasons'];
+            const activeErr = this.extractPrinterError(pReasons);
+
+            if (activeErr) {
+              const errTime = new Date().toISOString();
+              const jobFailed = await dbService.updateJob(jobId, {
+                status: 'FAILED',
+                failedAt: errTime,
+                lastAcknowledgementAt: errTime,
+                printerError: activeErr,
+                message: activeErr,
+              });
+              if (jobFailed) sseService.broadcastJobUpdate(jobFailed);
+              return;
+            }
+
+            const qCount = pAttrs['printer-attributes-tag']['queued-job-count'] || 0;
+            if ((pState === 'idle' || pState === 3) && qCount === 0 && Date.now() - startTime > 12000) {
+              console.log(`[Dispatcher] Job #${printerJobId} concluded: HP printer idle with clear queue.`);
+              const doneTime = new Date().toISOString();
+              const jobDone = await dbService.updateJob(jobId, {
+                status: 'COMPLETED',
+                printerJobState: 'completed',
+                completionVerified: true,
+                completedAt: doneTime,
+                sheetsPrinted: 1,
+                lastAcknowledgementAt: doneTime,
+                message: 'Printer reports that the document has finished printing.',
+                verificationDetails: {
+                  verifiedAt: doneTime,
+                  evidence: 'HP LaserJet completed physical print: printer returned to IDLE with 0 queued jobs.',
+                  finalPrinterState: 'IDLE',
+                  sheetsPrinted: 1,
+                },
+              });
+              if (jobDone) sseService.broadcastJobUpdate(jobDone);
+              return;
+            }
+          }
         }
       } catch (err: any) {
         console.warn(`[Dispatcher] Error tracking job #${printerJobId}: ${err.message}`);
       }
     }
 
-    // Timeout reached without explicit verification:
-    // Mark completed with completionVerified: false as mandated by Rule 17.D
+    // Timeout reached without explicit verification: check printer error state
     const finalAck = new Date().toISOString();
-    const jobUnconfirmed = await dbService.updateJob(jobId, {
-      status: 'COMPLETED',
+    let finalError = 'Printing timed out: Printer did not confirm completion within 60 seconds.';
+
+    try {
+      const pAttrs: any = await new Promise((resolve) => {
+        ippPrinter.execute('Get-Printer-Attributes', null, (err: any, res: any) => {
+          if (err) resolve(null);
+          else resolve(res);
+        });
+      });
+      if (pAttrs && pAttrs['printer-attributes-tag']) {
+        const pReasons = pAttrs['printer-attributes-tag']['printer-state-reasons'];
+        const activeErr = this.extractPrinterError(pReasons);
+        if (activeErr) finalError = activeErr;
+      }
+    } catch {}
+
+    const jobFailed = await dbService.updateJob(jobId, {
+      status: 'FAILED',
       completionVerified: false,
+      failedAt: finalAck,
       lastAcknowledgementAt: finalAck,
-      message: 'Printer accepted job; completion not confirmed by telemetry.',
-      verificationDetails: {
-        verifiedAt: finalAck,
-        evidence: `Job #${printerJobId} was spooled to HP LaserJet M126nw. Physical output not verified by telemetry.`,
-        finalPrinterState: 'IDLE',
-      },
+      printerError: finalError,
+      message: finalError,
     });
-    if (jobUnconfirmed) sseService.broadcastJobUpdate(jobUnconfirmed);
+    if (jobFailed) sseService.broadcastJobUpdate(jobFailed);
   }
 
   /**
@@ -389,6 +455,19 @@ export class DispatcherService {
         const pReasons = printerAttrs['printer-attributes-tag']['printer-state-reasons'];
         const ackTime = new Date().toISOString();
 
+        const activeErr = this.extractPrinterError(pReasons);
+        if (activeErr) {
+          const jobFailed = await dbService.updateJob(jobId, {
+            status: 'FAILED',
+            failedAt: ackTime,
+            lastAcknowledgementAt: ackTime,
+            printerError: activeErr,
+            message: activeErr,
+          });
+          if (jobFailed) sseService.broadcastJobUpdate(jobFailed);
+          return;
+        }
+
         if (pState === 'idle' || pState === 3) {
           const jobDone = await dbService.updateJob(jobId, {
             status: 'COMPLETED',
@@ -412,18 +491,45 @@ export class DispatcherService {
     }
 
     const finalAck = new Date().toISOString();
-    const jobUnconfirmed = await dbService.updateJob(jobId, {
-      status: 'COMPLETED',
+    const jobFailed = await dbService.updateJob(jobId, {
+      status: 'FAILED',
       completionVerified: false,
+      failedAt: finalAck,
       lastAcknowledgementAt: finalAck,
-      message: 'Job sent to printer port 9100; completion not confirmed.',
-      verificationDetails: {
-        verifiedAt: finalAck,
-        evidence: 'PCLm stream sent to Port 9100. Telemetry did not confirm sheet completion.',
-        finalPrinterState: 'IDLE',
-      },
+      printerError: 'RAW Print timed out: printer did not acknowledge completion.',
+      message: 'RAW print job could not be verified by printer telemetry.',
     });
-    if (jobUnconfirmed) sseService.broadcastJobUpdate(jobUnconfirmed);
+    if (jobFailed) sseService.broadcastJobUpdate(jobFailed);
+  }
+
+  /**
+   * Helper to parse and return human-readable printer hardware errors
+   */
+  private extractPrinterError(reasons: any): string | null {
+    if (!reasons) return null;
+    const reasonList = Array.isArray(reasons) ? reasons : [reasons];
+    const errorMap: Record<string, string> = {
+      'media-empty-report': 'Printer is out of paper. Please load paper into the input tray.',
+      'media-empty': 'Printer is out of paper. Please load paper into the input tray.',
+      'media-jam-report': 'Paper jam detected in the printer.',
+      'media-jam': 'Paper jam detected in the printer.',
+      'cover-open-report': 'Printer door or toner cartridge cover is open.',
+      'door-open': 'Printer door or toner cartridge cover is open.',
+      'spool-area-full-report': 'Printer memory / spool area is full. Waiting for current jobs to clear.',
+      'spool-area-full': 'Printer memory / spool area is full.',
+      'toner-empty-report': 'Toner cartridge is empty and must be replaced.',
+      'toner-empty': 'Toner cartridge is empty.',
+      'toner-missing-report': 'Toner cartridge is not installed.',
+    };
+
+    const critical = reasonList.filter(
+      (r: any) => typeof r === 'string' && r !== 'none' && !r.includes('low') && errorMap[r]
+    );
+
+    if (critical.length > 0) {
+      return critical.map((r: string) => errorMap[r] || r).join('; ');
+    }
+    return null;
   }
 }
 

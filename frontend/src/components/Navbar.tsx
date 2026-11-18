@@ -40,9 +40,6 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab }) => 
   };
 
   const getStatusLabel = (status?: PrinterOperationalStatus) => {
-    if (!status || status === 'ONLINE' || status === 'IDLE' || status === 'UNKNOWN' || status === 'OFFLINE') {
-      return 'READY TO PRINT';
-    }
     if (status === 'PRINTING' || status === 'BUSY') {
       return 'PRINTING';
     }
@@ -55,13 +52,16 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab }) => 
     if (status === 'ERROR') {
       return 'ATTENTION REQUIRED';
     }
+    if (status === 'OFFLINE') {
+      return 'OFFLINE';
+    }
+    if (status === 'UNKNOWN') {
+      return 'CONNECTING...';
+    }
     return 'READY TO PRINT';
   };
 
   const getStatusColor = (status?: PrinterOperationalStatus) => {
-    if (!status || status === 'ONLINE' || status === 'IDLE' || status === 'UNKNOWN' || status === 'OFFLINE') {
-      return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30';
-    }
     if (status === 'PRINTING' || status === 'BUSY') {
       return 'bg-blue-500/15 text-blue-400 border-blue-500/30';
     }
@@ -70,6 +70,12 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab }) => 
     }
     if (status === 'ERROR') {
       return 'bg-rose-500/15 text-rose-400 border-rose-500/30';
+    }
+    if (status === 'OFFLINE') {
+      return 'bg-slate-700/40 text-slate-400 border-slate-600/40';
+    }
+    if (status === 'UNKNOWN') {
+      return 'bg-amber-500/10 text-amber-300 border-amber-500/20';
     }
     return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30';
   };
