@@ -274,34 +274,49 @@ export class JobConsumer {
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       const socket = new net.Socket();
-      socket.setTimeout(25000);
+      socket.setTimeout(90000);
 
+      const safeName = (docName || 'document').replace(/["\r\n]/g, '_');
       const pjlHeader = Buffer.from(
         '\x1b%-12345X@PJL\r\n' +
-        `@PJL SET JOBNAME = "${docName}"\r\n` +
+        `@PJL SET JOBNAME = "${safeName}"\r\n` +
         `@PJL SET QTY = ${copies}\r\n` +
         `@PJL SET PAPER = ${paper === 'Letter' ? 'LETTER' : 'A4'}\r\n` +
         '@PJL ENTER LANGUAGE = PCLm\r\n',
         'ascii'
       );
-      const pjlFooter = Buffer.from('\r\n\x1b%-12345X', 'ascii');
+      const pjlFooter = Buffer.from('\r\n\x1b%-12345X@PJL\r\n@PJL RESET\r\n\x1b%-12345X', 'ascii');
       const payload = Buffer.concat([pjlHeader, data, pjlFooter]);
+
+      let finished = false;
 
       socket.connect(port, host, () => {
         socket.write(payload, () => {
           socket.end();
-          resolve();
         });
       });
 
+      socket.on('close', () => {
+        if (!finished) {
+          finished = true;
+          resolve();
+        }
+      });
+
       socket.on('error', (err) => {
-        socket.destroy();
-        reject(err);
+        if (!finished) {
+          finished = true;
+          socket.destroy();
+          reject(err);
+        }
       });
 
       socket.on('timeout', () => {
-        socket.destroy();
-        reject(new Error(`Timeout connecting to printer raw port ${host}:${port}`));
+        if (!finished) {
+          finished = true;
+          socket.destroy();
+          reject(new Error(`Timeout streaming to printer raw port ${host}:${port}`));
+        }
       });
     });
   }
