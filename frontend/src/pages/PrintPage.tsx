@@ -183,11 +183,6 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
           <div className="flex items-center gap-5 w-full md:w-auto">
             {/* 3D Printer with Pedestal Glow */}
             <div className="relative shrink-0 flex items-center justify-center w-28 h-28 sm:w-32 sm:h-32">
-              <img
-                src="/hp-printer.png"
-                alt="HP LaserJet Pro MFP M126nw"
-                className="relative z-10 w-full h-full object-contain filter drop-shadow-[0_10px_25px_rgba(6,182,212,0.4)]"
-              />
             </div>
 
             {/* Printer Details */}
@@ -349,11 +344,7 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
                   {/* Concentric Glow Ripples */}
                   <div className="absolute inset-0 rounded-full border border-cyan-500/25 bg-cyan-500/5 animate-pulse pointer-events-none" />
                   <div className="absolute inset-2.5 rounded-full border border-blue-500/35 bg-blue-500/10 pointer-events-none" />
-                  <img
-                    src="/pdf-3d-icon.png"
-                    alt="PDF Document"
-                    className="relative z-10 w-20 h-20 object-contain drop-shadow-[0_10px_25px_rgba(239,68,68,0.4)] group-hover:scale-110 transition-transform duration-300"
-                  />
+              
                 </div>
 
                 {/* Headline */}
