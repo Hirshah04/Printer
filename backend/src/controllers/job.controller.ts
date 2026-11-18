@@ -43,7 +43,7 @@ export async function createJob(req: Request, res: Response): Promise<void> {
       fileSizeBytes: req.file.size,
       pageCount: inspection.pageCount,
       copies: parsedCopies,
-      paperSize: paperSize === 'Letter' ? 'Letter' : 'A4',
+      paperSize: 'A4',
       orientation:
         orientation === 'LANDSCAPE'
           ? 'LANDSCAPE'

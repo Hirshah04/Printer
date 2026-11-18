@@ -34,7 +34,7 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
   const [printer, setPrinter] = useState<Printer | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [copies, setCopies] = useState<number>(1);
-  const [paperSize, setPaperSize] = useState<'A4' | 'Letter'>('A4');
+  const [paperSize] = useState<'A4'>('A4');
   const [orientation, setOrientation] = useState<'PORTRAIT' | 'LANDSCAPE' | 'AUTO'>('AUTO');
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
@@ -451,31 +451,15 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
                 <label className="block text-xs font-semibold text-slate-300 mb-2">
                   Paper Media
                 </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setPaperSize('A4')}
-                    className={`p-2.5 rounded-2xl border text-left transition-all ${
-                      paperSize === 'A4'
-                        ? 'bg-brand-600/20 border-brand-500 text-white shadow-md shadow-brand-500/15'
-                        : 'bg-slate-800/60 border-slate-700/60 text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <div className="text-xs font-bold">A4</div>
-                    <div className="text-[10px] text-slate-400 font-mono">210 × 297 mm</div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPaperSize('Letter')}
-                    className={`p-2.5 rounded-2xl border text-left transition-all ${
-                      paperSize === 'Letter'
-                        ? 'bg-brand-600/20 border-brand-500 text-white shadow-md shadow-brand-500/15'
-                        : 'bg-slate-800/60 border-slate-700/60 text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <div className="text-xs font-bold">Letter</div>
-                    <div className="text-[10px] text-slate-400 font-mono">8.5 × 11 in</div>
-                  </button>
+                <div className="p-2.5 rounded-2xl border border-brand-500/40 bg-brand-600/15 text-white flex items-center justify-between shadow-sm shadow-brand-500/10">
+                  <div>
+                    <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <span>A4</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-brand-500/20 text-brand-300 font-medium">Standard</span>
+                    </div>
+                    <div className="text-[10px] text-slate-400 font-mono">210 × 297 mm (Fixed)</div>
+                  </div>
+                  <CheckCircle2 className="h-4 w-4 text-brand-400" />
                 </div>
               </div>
 
