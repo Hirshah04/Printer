@@ -18,7 +18,7 @@ A streamlined, production-grade **Remote PDF Printing System** engineered specif
 
 ---
 
-## 2. System Flow
+## 2. System Flow (Hybrid Cloud + Local Worker Architecture)
 
 ```
                       [ ANY USER DEVICE ]
@@ -59,32 +59,21 @@ A streamlined, production-grade **Remote PDF Printing System** engineered specif
 
 ---
 
-## 3. Quick Start (Local Run)
+## 3. How to Run (Local Worker + Cloud Stack)
 
-### 1. Start Cloud Backend API
-```bash
-cd backend
-npm install
-npm run build
-npm start
+### 1. Start Local Print Worker (on your PC connected to printer Wi-Fi)
+Simply double-click `start-worker.bat` or run:
+```cmd
+.\start-worker.bat
 ```
-The API starts on `http://localhost:5000` with the target printer preset to `192.168.1.37`.
+The script will:
+- Check for Node.js and Python.
+- Auto-install `pymupdf`, `pywin32`, and `pillow` if not present.
+- Connect to your Render backend (`https://printer-8bki.onrender.com`).
+- Stream status and wait for incoming print jobs.
 
-### 2. Start Frontend Web App
-```bash
-cd frontend
-npm install
-npm run dev
-```
-Open `http://localhost:5173`. You will see the **Print Document** page immediately with live status for `192.168.1.37`.
-
-### 3. Start Cloud Print Worker
-```bash
-cd worker
-npm install
-npm run build
-npm start
-```
+### 2. Print Documents
+Open your Vercel deployment URL (or `cd frontend && npm run dev` locally). Drag & drop any single page or multi-page PDF and click **Print**. The local worker will receive the job and print it immediately to your HP LaserJet Pro MFP M126nw!
 
 ---
 

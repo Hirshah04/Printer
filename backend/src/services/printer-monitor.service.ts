@@ -2,6 +2,7 @@ import ipp from 'ipp';
 import { dbService, PrinterOperationalStatus, PrinterState } from './db.service.js';
 import { sseService } from './sse.service.js';
 import { config } from '../config/env.js';
+import { hasActiveWorker } from '../controllers/worker.controller.js';
 
 export class PrinterMonitorService {
   private timer: NodeJS.Timeout | null = null;
@@ -52,6 +53,13 @@ export class PrinterMonitorService {
   private async pollCycle(): Promise<void> {
     if (this.isPolling) {
       // Avoid overlapping requests if previous cycle is still in flight
+      return;
+    }
+
+    // When an active local print worker daemon is connected,
+    // the worker runs on LAN with the printer and reports authoritative telemetry.
+    // The cloud backend must not probe over WAN or overwrite status with OFFLINE.
+    if (hasActiveWorker()) {
       return;
     }
 

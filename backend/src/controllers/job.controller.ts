@@ -64,14 +64,14 @@ export async function createJob(req: Request, res: Response): Promise<void> {
 
     console.log(`[JobController] Job created: ${job._id} - ${job.documentName} (${job.pageCount} p, ${job.copies}x)`);
 
-    // In Method 1 (Direct Cloud Hardware Streaming):
-    // The cloud backend streams directly to the router's forwarded Port 9100 with zero reliance on local devices or worker daemons.
-    // Worker processing is only opted-in if explicitly configured via REQUIRE_WORKER=true.
-    if (process.env.REQUIRE_WORKER === 'true' && hasActiveWorker()) {
+    // In Local Worker Architecture:
+    // When the worker runs locally (via start-worker.bat), it claims QUEUED jobs over HTTPS.
+    // Cloud direct dispatch (to WAN port 9100) is only used as a fallback if no worker is active and worker is not required.
+    if (hasActiveWorker() || process.env.REQUIRE_WORKER === 'true') {
       const worker = getActiveWorkerInfo();
-      console.log(`[JobController] Active print worker detected [${worker?.workerId}]. Job ${job._id} queued for worker processing.`);
+      console.log(`[JobController] Print worker active [${worker?.workerId || 'local-worker'}]. Job ${job._id} queued for local worker processing.`);
     } else {
-      console.log(`[JobController] Method 1 Direct Dispatch: Initiating hardware streaming to ${config.printer.ip}...`);
+      console.log(`[JobController] No active worker detected. Direct Dispatch: Initiating hardware streaming to ${config.printer.ip}...`);
       dispatcherService.dispatch(job._id);
     }
 
@@ -133,8 +133,12 @@ export async function retryJob(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    console.log(`[JobController] Job ${job._id} retried - re-dispatching`);
-    dispatcherService.dispatch(job._id);
+    console.log(`[JobController] Job ${job._id} retried - re-queued for processing`);
+    if (!hasActiveWorker() && process.env.REQUIRE_WORKER !== 'true') {
+      dispatcherService.dispatch(job._id);
+    } else {
+      console.log(`[JobController] Print worker active, retried job ${job._id} will be claimed by worker.`);
+    }
 
     res.json({ success: true, message: 'Job re-queued and printing.', job });
   } catch (err: any) {

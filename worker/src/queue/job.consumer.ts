@@ -31,8 +31,42 @@ export class JobConsumer {
     console.log(`[Worker] Connected to Backend: ${config.backendUrl}`);
 
     await this.sendHeartbeat();
+    await this.reportPrinterStatus();
     setInterval(() => this.sendHeartbeat(), config.heartbeatIntervalMs);
     setInterval(() => this.pollJobs(), config.pollIntervalMs);
+    setInterval(() => this.reportPrinterStatus(), config.printerMonitorIntervalMs || 20000);
+  }
+
+  async reportPrinterStatus(): Promise<void> {
+    try {
+      const state = await ippClient.queryPrinterState(config.defaultPrinterIp, 631, '/ipp/printer');
+      if (state) {
+        const isIdle = state.state === 'IDLE';
+        const isPrinting = state.state === 'PRINTING' || state.state === 'PROCESSING';
+        const hasError = state.stateReasons?.some((r: string) => r && r !== 'none' && !r.includes('low') && !r.includes('report'));
+
+        await this.apiClient.post('/api/worker/printer/status', {
+          connectionStatus: hasError ? 'ERROR' : isPrinting ? 'BUSY' : 'ONLINE',
+          paperStatus: state.stateReasons?.some((r: string) => r.includes('media-empty')) ? 'EMPTY' : 'OK',
+          tonerStatus: state.stateReasons?.some((r: string) => r.includes('toner-empty')) ? 'EMPTY' : 'OK',
+          stateReasons: state.stateReasons || ['none'],
+          supportedFormats: ['application/PCLm', 'image/urf', 'image/jpeg', 'application/octet-stream'],
+        });
+      } else {
+        const reachable = await vpnMonitor.probeHost(config.defaultPrinterIp, 631, 2000);
+        if (reachable) {
+          await this.apiClient.post('/api/worker/printer/status', {
+            connectionStatus: 'ONLINE',
+            paperStatus: 'OK',
+            tonerStatus: 'OK',
+            stateReasons: ['none'],
+            supportedFormats: ['application/PCLm', 'image/urf', 'image/jpeg', 'application/octet-stream'],
+          });
+        }
+      }
+    } catch {
+      // Telemetry report is best effort
+    }
   }
 
   async sendHeartbeat(): Promise<void> {
@@ -102,7 +136,7 @@ export class JobConsumer {
 
       // 2. On Windows, route directly through the official Windows print driver for 100% reliable printing
       if (process.platform === 'win32') {
-        const winPrinter = 'HP LaserJet Pro MFP M126nw';
+        const winPrinter = process.env.WINDOWS_PRINTER_NAME || 'HP LaserJet Pro MFP M126nw';
         console.log(`[Worker] Windows detected. Printing via Windows driver: "${winPrinter}"...`);
         await this.updateStatus(jobId, 'PROCESSING', `Printing via Windows driver: ${winPrinter}...`);
 

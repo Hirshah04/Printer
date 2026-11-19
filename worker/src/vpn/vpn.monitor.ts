@@ -86,7 +86,7 @@ export class VpnMonitor {
   /**
    * Lightweight TCP probe to test host reachability without requiring root ICMP ping
    */
-  private probeHost(host: string, port: number, timeoutMs: number): Promise<boolean> {
+  probeHost(host: string, port: number, timeoutMs: number): Promise<boolean> {
     return new Promise((resolve) => {
       const socket = new net.Socket();
       let resolved = false;
