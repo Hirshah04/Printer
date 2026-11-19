@@ -143,41 +143,9 @@ export class JobConsumer {
       console.log(`[Worker] Downloaded ${pdfBuffer.length} bytes successfully.`);
       await fs.promises.writeFile(tempPdf, pdfBuffer);
 
-      // 2. On Windows, route directly through the official Windows print driver for 100% reliable printing
-      if (process.platform === 'win32') {
-        const winPrinter = process.env.WINDOWS_PRINTER_NAME || 'HP LaserJet Pro MFP M126nw';
-        console.log(`[Worker] Printing via Windows driver: "${winPrinter}" -> sending to ${targetLanIp}...`);
-        await this.updateStatus(jobId, 'PROCESSING', `Printing via Windows driver: ${winPrinter}...`);
-
-        const printed = await this.printViaWindowsDriver(tempPdf, winPrinter, job.copies || 1);
-        if (printed) {
-          const printerJobId = `WIN-${Date.now().toString().slice(-4)}`;
-          await this.updateStatus(jobId, 'PRINTER_ACCEPTED', `Accepted by Windows Print Spooler (${winPrinter})`, printerJobId);
-          await this.updateStatus(jobId, 'PRINTING', 'Printer is physically processing and printing document...', printerJobId);
-
-          await this.waitForWindowsSpooler(winPrinter);
-
-          console.log(`[Worker] Physical print job completed on ${targetLanIp} via ${winPrinter}!`);
-          await this.updateStatus(
-            jobId,
-            'COMPLETED',
-            'Document physically printed on HP LaserJet Pro MFP M126nw.',
-            printerJobId,
-            undefined,
-            {
-              verifiedAt: new Date(),
-              evidence: `Printed cleanly through official Windows HP driver (${winPrinter}) on ${targetLanIp}.`,
-              finalPrinterState: 'IDLE',
-              sheetsPrinted: job.pageCount * (job.copies || 1),
-            }
-          );
-          return;
-        }
-        console.warn(`[Worker] Windows driver print failed, falling back to direct network protocols.`);
-      }
-
-      // 3. Fallback: Convert PDF to native HP LaserJet PCLm stream at 300 DPI
-      await this.updateStatus(jobId, 'PROCESSING', 'Converting document to HP PCLm raster stream at 300 DPI...');
+      // 1. Primary Method: Direct Native IPP Port 631 (standard AirPrint hardware protocol)
+      // Generates 100% clean, standardized ISO A4 PCLm stream and delivers directly to printer hardware.
+      await this.updateStatus(jobId, 'PROCESSING', 'Generating native A4 PCLm raster stream...');
 
       const conversion = await pclmConverter.convertPdfToPclm(pdfBuffer, {
         paperSize: job.paperSize || 'A4',
@@ -185,17 +153,16 @@ export class JobConsumer {
         orientation: job.orientation || 'AUTO',
       });
 
-      // Fallback network ports on local printer
       const targetPort = printer?.ippPort || 631;
       const targetEndpoint = printer?.ippEndpoint || '/ipp/printer';
 
-      await this.updateStatus(jobId, 'SENT_TO_PRINTER', `Submitting document to ${targetLanIp}...`);
+      await this.updateStatus(jobId, 'SENT_TO_PRINTER', `Submitting document to ${targetLanIp}:${targetPort}...`);
 
       let isSubmitted = false;
       let printerJobId = '';
       let methodUsed = '';
 
-      // Protocol 1: IPP Port 631 (standard IPP submission)
+      // Protocol 1: IPP Port 631
       try {
         console.log(`[Worker] Submitting PCLm document via IPP Port 631 to ${targetLanIp}:${targetPort}${targetEndpoint}...`);
         const ippRes = await ippClient.submitJob(
@@ -218,13 +185,13 @@ export class JobConsumer {
           methodUsed = `IPP Port 631 (${printerJobId})`;
           console.log(`[Worker] Job accepted via IPP Port 631 with ID: ${printerJobId}`);
         } else {
-          console.warn(`[Worker] IPP Port 631 error: ${ippRes.error}. Trying RAW Port 9100...`);
+          console.warn(`[Worker] IPP Port 631 rejected: ${ippRes.error}. Trying RAW Port 9100...`);
         }
       } catch (ippErr: any) {
         console.warn(`[Worker] IPP Port 631 error: ${ippErr.message}. Trying RAW Port 9100...`);
       }
 
-      // Protocol 2: Fallback to Direct HP JetDirect RAW Socket (Port 9100) if IPP was not accepted
+      // Protocol 2: Fallback to Direct HP JetDirect RAW Socket (Port 9100)
       if (!isSubmitted) {
         try {
           console.log(`[Worker] Streaming to HP JetDirect RAW port 9100 on ${targetLanIp}...`);
@@ -241,8 +208,27 @@ export class JobConsumer {
           methodUsed = 'HP JetDirect RAW Port 9100';
           console.log(`[Worker] RAW stream successfully delivered to ${targetLanIp}:9100!`);
         } catch (rawErr: any) {
-          throw new Error(`Both IPP Port 631 and Port 9100 failed: ${rawErr.message}`);
+          console.warn(`[Worker] RAW port 9100 failed: ${rawErr.message}. Trying Windows driver...`);
         }
+      }
+
+      // Protocol 3: Fallback to Windows GDI driver
+      if (!isSubmitted && process.platform === 'win32') {
+        const winPrinter = process.env.WINDOWS_PRINTER_NAME || 'HP LaserJet Pro MFP M126nw';
+        console.log(`[Worker] Fallback: Printing via Windows driver: "${winPrinter}"...`);
+        await this.updateStatus(jobId, 'PROCESSING', `Printing via Windows driver: ${winPrinter}...`);
+
+        const printed = await this.printViaWindowsDriver(tempPdf, winPrinter, job.copies || 1);
+        if (printed) {
+          printerJobId = `WIN-${Date.now().toString().slice(-4)}`;
+          isSubmitted = true;
+          methodUsed = `Windows GDI (${winPrinter})`;
+          await this.waitForWindowsSpooler(winPrinter);
+        }
+      }
+
+      if (!isSubmitted) {
+        throw new Error('All print protocols (IPP Port 631, RAW Port 9100, Windows GDI) failed to deliver document to printer.');
       }
 
       await this.updateStatus(

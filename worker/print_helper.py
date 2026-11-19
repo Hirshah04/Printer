@@ -28,12 +28,11 @@ if hasattr(sys.stdout, 'reconfigure'):
         pass
 
 # =============================================================================
-# A4 FULL-PAGE 200% SCALING CONFIGURATION
+# A4 STANDARD FULL-PAGE CONFIGURATION (1:1 Hardware Buffer Alignment)
 # =============================================================================
-# The HP LaserJet Pro MFP M126nw hardware operates at 600 DPI.
-# When DC reports 300 DPI (2480x3508), scaling by 200% (2.0x) outputs
-# 4960 x 7016 dots, covering the 100% full A4 paper sheet edge-to-edge.
-SCALE_FACTOR = float(os.getenv('PRINT_SCALE', '2.0'))  # 200% scale
+# The HP LaserJet Pro MFP M126nw DC reports 2480 x 3508 at 300 DPI (standard A4).
+# SCALE_FACTOR is strictly 1.0 to prevent raster buffer overflow and stride corruption.
+SCALE_FACTOR = 1.0
 
 
 class BITMAPINFOHEADER(ctypes.Structure):
@@ -85,6 +84,7 @@ def method_pymupdf_gdi(pdf_path, printer_name, copies=1):
     except ImportError:
         import fitz
 
+    from PIL import Image, ImageWin
     import win32print
     import win32ui
     import win32con
@@ -95,34 +95,18 @@ def method_pymupdf_gdi(pdf_path, printer_name, copies=1):
 
     doc = fitz.open(pdf_path)
     page_count = doc.page_count
-    print(f"[PrintHelper] PDF has {page_count} page(s), printing {copies}x copy(ies) at 200% scale to '{resolved_printer}'...", flush=True)
-
-    gdi32 = ctypes.windll.gdi32
-    gdi32.StretchDIBits.argtypes = [
-        wintypes.HDC,
-        wintypes.INT, wintypes.INT, wintypes.INT, wintypes.INT,
-        wintypes.INT, wintypes.INT, wintypes.INT, wintypes.INT,
-        ctypes.c_char_p,
-        ctypes.POINTER(BITMAPINFOHEADER),
-        wintypes.UINT,
-        wintypes.DWORD
-    ]
-    gdi32.StretchDIBits.restype = wintypes.INT
+    print(f"[PrintHelper] PDF has {page_count} page(s), printing {copies}x copy(ies) to '{resolved_printer}'...", flush=True)
 
     try:
         # Create printer Device Context
         hDC = win32ui.CreateDC()
         hDC.CreatePrinterDC(resolved_printer)
 
-        # Base printable area reported by DC (300 DPI base: 2480 x 3508)
-        base_w = hDC.GetDeviceCaps(win32con.HORZRES) or 2480
-        base_h = hDC.GetDeviceCaps(win32con.VERTRES) or 3508
+        # Base printable area reported by DC (A4: 2480 x 3508 at 300 DPI)
+        printable_w = hDC.GetDeviceCaps(win32con.HORZRES) or 2480
+        printable_h = hDC.GetDeviceCaps(win32con.VERTRES) or 3508
 
-        # Target 200% full-page dimensions (4960 x 7016 @ 600 DPI engine)
-        printable_w = int(base_w * SCALE_FACTOR)
-        printable_h = int(base_h * SCALE_FACTOR)
-
-        print(f"[PrintHelper] Target Paper: Full A4 @ 200% Scale ({printable_w} x {printable_h} dots)", flush=True)
+        print(f"[PrintHelper] Target Paper: Full A4 ({printable_w} x {printable_h} dots)", flush=True)
 
         for copy_idx in range(copies):
             if copies > 1:
@@ -141,11 +125,8 @@ def method_pymupdf_gdi(pdf_path, printer_name, copies=1):
                 page_w = page.rect.width
                 page_h = page.rect.height
 
-                # Compute scale to fill the full A4 printable area at 200%
-                scale_x = printable_w / page_w
-                scale_y = printable_h / page_h
-                scale = min(scale_x, scale_y)
-
+                # Compute scale to fit within the printable A4 page keeping aspect ratio
+                scale = min(printable_w / page_w, printable_h / page_h)
                 dest_w = int(page_w * scale)
                 dest_h = int(page_h * scale)
 
@@ -153,40 +134,19 @@ def method_pymupdf_gdi(pdf_path, printer_name, copies=1):
                 dest_x = (printable_w - dest_w) // 2
                 dest_y = (printable_h - dest_h) // 2
 
-                # Render source bitmap at 300 DPI (2480x3508) for optimal buffer performance
-                render_w = int(dest_w / SCALE_FACTOR)
-                render_h = int(dest_h / SCALE_FACTOR)
-                mat = fitz.Matrix(render_w / page_w, render_h / page_h)
-                pix = page.get_pixmap(matrix=mat, alpha=True)
+                # Render source bitmap cleanly with no alpha (24-bit RGB)
+                mat = fitz.Matrix(dest_w / page_w, dest_h / page_h)
+                pix = page.get_pixmap(matrix=mat, alpha=False, colorspace=fitz.csRGB)
 
-                pix_w, pix_h = pix.width, pix.height
-                samples = pix.samples
-
-                # Build 32-bit top-down BITMAPINFOHEADER
-                bmi = BITMAPINFOHEADER()
-                bmi.biSize = 40
-                bmi.biWidth = pix_w
-                bmi.biHeight = -pix_h
-                bmi.biPlanes = 1
-                bmi.biBitCount = 32
-                bmi.biCompression = 0
-                bmi.biSizeImage = len(samples)
+                # Create PIL DIB (guarantees correct BGR conversion and 4-byte stride alignment)
+                img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+                dib = ImageWin.Dib(img)
 
                 hDC.StartPage()
-
-                # Hardware stretch from (pix_w x pix_h) to 200% full-page (dest_w x dest_h)
-                scanlines = gdi32.StretchDIBits(
-                    hDC.GetSafeHdc(),
-                    dest_x, dest_y, dest_w, dest_h,
-                    0, 0, pix_w, pix_h,
-                    samples,
-                    ctypes.byref(bmi),
-                    0,
-                    0x00CC0020  # SRCCOPY
-                )
-
+                dib.draw(hDC.GetSafeHdc(), (dest_x, dest_y, dest_x + dest_w, dest_y + dest_h))
                 hDC.EndPage()
-                print(f"[PrintHelper] Page {page_num + 1}/{page_count} sent at 200% full A4: {dest_w}x{dest_h} (scanlines: {scanlines}) [OK]", flush=True)
+
+                print(f"[PrintHelper] Page {page_num + 1}/{page_count} sent cleanly to A4: {dest_w}x{dest_h} [OK]", flush=True)
 
             hDC.EndDoc()
 
