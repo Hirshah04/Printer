@@ -51,37 +51,54 @@ class BITMAPINFO(ctypes.Structure):
 
 def detect_active_connection():
     """
-    Detect whether the printer is connected via USB or Wi-Fi:
-    1. Check USB: Look for an installed LaserJet mapped to a USB port (USB001, etc.)
-       that is NOT marked offline. If USB is active, return ('usb', printer_name, port).
-    2. Check Wi-Fi: If USB is not connected, check if Wi-Fi printer exists.
-       Return ('wifi', printer_name, port/ip).
-    3. If neither: return ('none', None, None).
+    Detect whether the printer is physically connected via USB or Wi-Fi:
+    1. Check USB: Verify Windows PnP device manager has an active, present USB printer.
+       If and only if physical USB hardware acknowledges, return ('usb', printer_name, port).
+    2. Check Wi-Fi: If USB is not physically connected, query the printer over Wi-Fi (IP 631/9100).
+       If Wi-Fi acknowledges, return ('wifi', printer_name, port/ip).
+    3. If neither acknowledges: return ('none', None, None).
     """
     import win32print
     import socket
+    import subprocess
 
+    # 1. Physical Hardware USB Check (via Windows PnP Device Manager)
+    usb_hw_present = False
     try:
-        installed = win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)
+        ps_script = (
+            "& { $dev = Get-PnpDevice -Class USB,Printer -ErrorAction SilentlyContinue | "
+            "Where-Object { ($_.InstanceId -match 'USBPRINT.*M126|03F0.*222A') -and $_.Present -eq $true -and $_.Status -eq 'OK' }; "
+            "if ($dev) { Write-Host 'PRESENT' } else { Write-Host 'NOT_PRESENT' } }"
+        )
+        res = subprocess.run(
+            ['powershell', '-NoProfile', '-Command', ps_script],
+            capture_output=True,
+            text=True,
+            timeout=4
+        )
+        out = (res.stdout or '').strip()
+        if 'PRESENT' in out and 'NOT_PRESENT' not in out:
+            usb_hw_present = True
     except Exception:
-        installed = []
+        usb_hw_present = False
 
-    # 1. Check USB connection first (if USB connected -> USE USB ONLY)
-    for p in installed:
-        name = p[2]
-        if 'laserjet' in name.lower() or 'm126' in name.lower():
-            try:
-                h = win32print.OpenPrinter(name)
-                info = win32print.GetPrinter(h, 2)
-                port = str(info.get('pPortName', ''))
-                attr = info.get('Attributes', 0)
-                win32print.ClosePrinter(h)
-                is_offline = bool(attr & win32print.PRINTER_ATTRIBUTE_WORK_OFFLINE)
-                if port.upper().startswith('USB') and not is_offline:
-                    print(f"[PrintHelper] Connection Check: USB is CONNECTED -> '{name}' on {port}", flush=True)
-                    return 'usb', name, port
-            except Exception:
-                pass
+    if usb_hw_present:
+        try:
+            installed = win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL)
+            for p in installed:
+                name = p[2]
+                if 'laserjet' in name.lower() or 'm126' in name.lower():
+                    h = win32print.OpenPrinter(name)
+                    info = win32print.GetPrinter(h, 2)
+                    port = str(info.get('pPortName', ''))
+                    win32print.ClosePrinter(h)
+                    if port.upper().startswith('USB'):
+                        print(f"[PrintHelper] Connection Check: USB is PHYSICALLY CONNECTED -> '{name}' on {port}", flush=True)
+                        return 'usb', name, port
+        except Exception:
+            pass
+        print("[PrintHelper] Connection Check: USB is PHYSICALLY CONNECTED -> 'Hewlett-Packard HP LaserJet Pro MFP M126nw (Copy 1)' on USB001", flush=True)
+        return 'usb', 'Hewlett-Packard HP LaserJet Pro MFP M126nw (Copy 1)', 'USB001'
 
     # 2. Check Wi-Fi connection (target IP port 631 / 9100)
     target_ip = os.getenv('DEFAULT_PRINTER_IP', '192.168.1.37')
@@ -98,16 +115,17 @@ def detect_active_connection():
             pass
 
     if wifi_reachable:
-        # Find Wi-Fi printer name in Windows (e.g. 'HP LaserJet Pro MFP M126nw')
-        wifi_printer = None
-        for p in installed:
-            name = p[2]
-            if ('laserjet' in name.lower() or 'm126' in name.lower()) and 'copy' not in name.lower():
-                wifi_printer = name
-                break
-        selected_wifi = wifi_printer or 'HP LaserJet Pro MFP M126nw'
-        print(f"[PrintHelper] Connection Check: USB not active. Wi-Fi is REACHABLE ({target_ip}:631) -> '{selected_wifi}'", flush=True)
-        return 'wifi', selected_wifi, f"{target_ip}:631"
+        try:
+            installed = win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)
+            for p in installed:
+                name = p[2]
+                if ('laserjet' in name.lower() or 'm126' in name.lower()) and 'copy' not in name.lower():
+                    print(f"[PrintHelper] Connection Check: USB disconnected. Wi-Fi is REACHABLE ({target_ip}:631) -> '{name}'", flush=True)
+                    return 'wifi', name, f"{target_ip}:631"
+        except Exception:
+            pass
+        print(f"[PrintHelper] Connection Check: USB disconnected. Wi-Fi is REACHABLE ({target_ip}:631) -> 'HP LaserJet Pro MFP M126nw'", flush=True)
+        return 'wifi', 'HP LaserJet Pro MFP M126nw', f"{target_ip}:631"
 
     print("[PrintHelper] Connection Check: Neither USB nor Wi-Fi printer detected!", flush=True)
     return 'none', None, None

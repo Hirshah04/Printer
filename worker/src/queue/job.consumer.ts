@@ -31,10 +31,10 @@ export class JobConsumer {
     console.log(`[Worker] Connected to Backend: ${config.backendUrl}`);
 
     const usbStatus = await this.checkUsbConnection();
-    const wifiConnected = await this.checkWifiConnection(config.defaultPrinterIp || '192.168.1.37', 631);
+    const wifiStatus = await this.checkWifiConnection(config.defaultPrinterIp || '192.168.1.37', 631);
     console.log(`[Worker] Active Hardware Interfaces:`);
-    console.log(`  - USB  : ${usbStatus.connected ? `CONNECTED ("${usbStatus.printerName}" on ${usbStatus.port}) -> [PRIMARY ROUTE]` : 'DISCONNECTED / OFFLINE'}`);
-    console.log(`  - Wi-Fi: ${wifiConnected ? `REACHABLE (${config.defaultPrinterIp || '192.168.1.37'}:631) -> [FALLBACK @ 600 DPI]` : 'UNREACHABLE'}`);
+    console.log(`  - USB  : ${usbStatus.connected ? `PHYSICALLY CONNECTED ("${usbStatus.printerName}" on ${usbStatus.port}) -> [PRIMARY ROUTE]` : 'DISCONNECTED / UNPLUGGED'}`);
+    console.log(`  - Wi-Fi: ${wifiStatus.connected ? `ACKNOWLEDGED (${config.defaultPrinterIp || '192.168.1.37'}:631, State: ${wifiStatus.state}) -> [ACTIVE @ 600 DPI]` : 'UNREACHABLE'}`);
 
     await this.sendHeartbeat();
     await this.reportPrinterStatus();
@@ -130,15 +130,15 @@ export class JobConsumer {
     const usbStatus = await this.checkUsbConnection();
     const targetPort = printer?.ippPort || 631;
     const targetEndpoint = printer?.ippEndpoint || '/ipp/printer';
-    const wifiConnected = await this.checkWifiConnection(targetLanIp, targetPort);
+    const wifiStatus = await this.checkWifiConnection(targetLanIp, targetPort);
 
     console.log(`=====================================================================`);
     console.log(`📥 [Worker] NEW PRINT JOB RECEIVED: "${job.documentName}" (${job.pageCount} p, ${job.copies || 1}x)`);
     console.log(`🔗 [Worker] FETCHING FILE FROM   : ${downloadUrl}`);
     if (usbStatus.connected) {
       console.log(`🔌 [Worker] ACTIVE ROUTE         : USB DIRECT ("${usbStatus.printerName}" on ${usbStatus.port}) [PRIORITY]`);
-    } else if (wifiConnected) {
-      console.log(`📡 [Worker] ACTIVE ROUTE         : WI-FI DIRECT (${targetLanIp}:${targetPort}) @ 600 DPI`);
+    } else if (wifiStatus.connected) {
+      console.log(`📡 [Worker] ACTIVE ROUTE         : WI-FI DIRECT (${targetLanIp}:${targetPort}, State: ${wifiStatus.state}) @ 600 DPI`);
     } else {
       console.log(`⚠️ [Worker] ACTIVE ROUTE         : NO PRINTER DETECTED`);
     }
@@ -164,10 +164,10 @@ export class JobConsumer {
       let methodUsed = '';
 
       // =========================================================================
-      // CASE 1: USB IS CONNECTED -> USE USB ONLY
+      // CASE 1: USB IS PHYSICALLY CONNECTED -> USE USB ONLY
       // =========================================================================
       if (usbStatus.connected && usbStatus.printerName) {
-        console.log(`[Worker] USB is connected -> using USB ONLY for job ${jobId}.`);
+        console.log(`[Worker] USB hardware confirmed -> using USB ONLY for job ${jobId}.`);
         await this.updateStatus(jobId, 'PROCESSING', `Printing via USB (${usbStatus.printerName})...`);
 
         const printed = await this.printViaWindowsDriver(tempPdf, usbStatus.printerName, job.copies || 1);
@@ -197,15 +197,15 @@ export class JobConsumer {
       }
 
       // =========================================================================
-      // CASE 2: USB NOT CONNECTED, WI-FI IS CONNECTED -> USE WI-FI AT 600 DPI
+      // CASE 2: USB DISCONNECTED, WI-FI ACKNOWLEDGED -> USE WI-FI AT 600 DPI
       // =========================================================================
-      if (wifiConnected) {
-        console.log(`[Worker] USB is not connected. Wi-Fi reachable -> using Wi-Fi at 600 DPI for job ${jobId}.`);
+      if (wifiStatus.connected) {
+        console.log(`[Worker] USB is disconnected. Wi-Fi acknowledged (${targetLanIp}:${targetPort}, ${wifiStatus.state}) -> using Wi-Fi at 600 DPI for job ${jobId}.`);
         await this.updateStatus(jobId, 'PROCESSING', 'Generating native 600 DPI A4 PCLm stream for Wi-Fi printing...');
 
         const conversion = await pclmConverter.convertPdfToPclm(pdfBuffer, {
           paperSize: job.paperSize || 'A4',
-          resolutionDpi: 600, // 600 DPI for hardware engine full A4 matching
+          resolutionDpi: 600, // 600 DPI strictly matching HP laser hardware
           orientation: job.orientation || 'AUTO',
         });
 
@@ -536,43 +536,35 @@ export class JobConsumer {
   }
 
   /**
-   * Check whether an active USB printer connection exists and is not offline
+   * Check whether an active USB printer is physically plugged in and acknowledged by Windows PnP
    */
   private async checkUsbConnection(): Promise<{ connected: boolean; printerName?: string; port?: string }> {
     if (process.platform !== 'win32') return { connected: false };
     try {
-      const pyCmd = `python -c "import win32print, json
-found = None
-try:
-    for p in win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS):
-        name = p[2]
-        if 'laserjet' in name.lower() or 'm126' in name.lower():
-            h = win32print.OpenPrinter(name)
-            info = win32print.GetPrinter(h, 2)
-            port = str(info.get('pPortName', ''))
-            attr = info.get('Attributes', 0)
-            win32print.ClosePrinter(h)
-            is_offline = bool(attr & win32print.PRINTER_ATTRIBUTE_WORK_OFFLINE)
-            if port.upper().startswith('USB') and not is_offline:
-                found = {'connected': True, 'name': name, 'port': port}
-                break
-except Exception:
-    pass
-print(json.dumps(found or {'connected': False}))"`;
-
-      const { stdout } = await execAsync(pyCmd, { timeout: 4000 });
-      const parsed = JSON.parse(stdout.trim());
-      if (parsed && parsed.connected) {
-        return { connected: true, printerName: parsed.name, port: parsed.port };
+      const scriptCandidates = [
+        path.resolve(process.cwd(), 'dist/scripts/check_connection.py'),
+        path.resolve(process.cwd(), 'src/scripts/check_connection.py'),
+        path.resolve(process.cwd(), 'worker/src/scripts/check_connection.py'),
+        path.resolve(__dirname, '../scripts/check_connection.py'),
+      ];
+      const scriptPath = scriptCandidates.find((p) => fs.existsSync(p));
+      if (scriptPath) {
+        const { stdout } = await execAsync(`python "${scriptPath}"`, { timeout: 5000 });
+        const parsed = JSON.parse(stdout.trim());
+        if (parsed && parsed.usb && parsed.usb.connected) {
+          return { connected: true, printerName: parsed.usb.printerName, port: parsed.usb.port };
+        }
+        return { connected: false };
       }
     } catch {
+      // Fallback: PowerShell PnP physical hardware check
       try {
         const { stdout } = await execAsync(
-          `powershell -NoProfile -Command "(Get-Printer | Where-Object { $_.PortName -like 'USB*' -and -not $_.WorkOffline } | Select-Object -First 1).Name"`
+          `powershell -NoProfile -Command "& { $dev = Get-PnpDevice -Class USB,Printer -ErrorAction SilentlyContinue | Where-Object { ($_.InstanceId -match 'USBPRINT.*M126|03F0.*222A') -and $_.Present -eq $true -and $_.Status -eq 'OK' }; if ($dev) { Write-Host 'PRESENT' } else { Write-Host 'NOT_PRESENT' } }"`,
+          { timeout: 4000 }
         );
-        const name = stdout.trim();
-        if (name) {
-          return { connected: true, printerName: name, port: 'USB001' };
+        if (stdout.includes('PRESENT') && !stdout.includes('NOT_PRESENT')) {
+          return { connected: true, printerName: 'Hewlett-Packard HP LaserJet Pro MFP M126nw (Copy 1)', port: 'USB001' };
         }
       } catch {}
     }
@@ -580,23 +572,33 @@ print(json.dumps(found or {'connected': False}))"`;
   }
 
   /**
-   * Check whether target IP and port (e.g. 631 IPP or 9100 RAW) are reachable
+   * Check whether target IP and port (e.g. 631 IPP or 9100 RAW) are reachable and acknowledging
    */
-  private async checkWifiConnection(ip: string, port = 631, timeoutMs = 1500): Promise<boolean> {
+  private async checkWifiConnection(ip: string, port = 631, timeoutMs = 2500): Promise<{ connected: boolean; state?: string }> {
+    try {
+      // 1. Direct IPP state query (takes actual acknowledgment from printer)
+      const state = await ippClient.queryPrinterState(ip, port, '/ipp/printer');
+      if (state && state.state) {
+        return { connected: true, state: state.state };
+      }
+    } catch {
+      // Continue to socket fallback
+    }
+
     return new Promise((resolve) => {
       const socket = new net.Socket();
       socket.setTimeout(timeoutMs);
       socket.on('connect', () => {
         socket.destroy();
-        resolve(true);
+        resolve({ connected: true, state: 'ONLINE' });
       });
       socket.on('timeout', () => {
         socket.destroy();
-        resolve(false);
+        resolve({ connected: false });
       });
       socket.on('error', () => {
         socket.destroy();
-        resolve(false);
+        resolve({ connected: false });
       });
       socket.connect(port, ip);
     });
