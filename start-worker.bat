@@ -14,6 +14,14 @@ echo.
 
 cd /d "%~dp0worker"
 
+:: 0. Initialize configuration from template if .env does not exist
+if not exist ".env" (
+    if exist ".env.example" (
+        echo [*] First-time setup: Creating .env from .env.example...
+        copy /y ".env.example" ".env" >nul
+    )
+)
+
 :: 1. Check Node.js
 where node >nul 2>&1
 if %ERRORLEVEL% neq 0 (

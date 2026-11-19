@@ -4,7 +4,7 @@ dotenv.config();
 export const config = {
   workerId: process.env.WORKER_ID || `worker-${process.platform}-${Math.random().toString(36).substring(2, 7)}`,
   workerName: process.env.WORKER_NAME || 'Cloud Print Worker #1',
-  backendUrl: (process.env.BACKEND_URL || 'http://localhost:5000').replace(/\/$/, ''),
+  backendUrl: (process.env.BACKEND_URL || 'https://printer-8bki.onrender.com').replace(/\/$/, ''),
   workerApiKey: process.env.WORKER_API_KEY || 'printer-worker-auth-secret-token-xyz',
   redisUrl: process.env.REDIS_URL || '',
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || '2500', 10),
