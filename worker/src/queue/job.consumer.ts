@@ -114,17 +114,25 @@ export class JobConsumer {
 
   private async processJob(job: any, printer: any): Promise<void> {
     const jobId = job._id;
-    console.log(`[Worker] Processing Job ${jobId} for "${job.documentName}"`);
+    const targetLanIp = config.defaultPrinterIp || (printer?.lanIp?.startsWith('192.168.') ? printer.lanIp : '192.168.1.37');
+    
+    let downloadUrl = job.storageUrl;
+    if (!downloadUrl.startsWith('http')) {
+      downloadUrl = `${config.backendUrl}${downloadUrl.startsWith('/') ? downloadUrl : '/' + downloadUrl}`;
+    }
+
+    console.log(`=====================================================================`);
+    console.log(`📥 [Worker] NEW PRINT JOB RECEIVED: "${job.documentName}" (${job.pageCount} p, ${job.copies || 1}x)`);
+    console.log(`🔗 [Worker] FETCHING FILE FROM   : ${downloadUrl}`);
+    console.log(`🖨️ [Worker] TARGET PRINTER IP    : ${targetLanIp}`);
+    console.log(`🔌 [Worker] TARGET PORT / DRIVER : Windows Driver (TCP/IP 192.168.1.37:9100) / IPP 631`);
+    console.log(`=====================================================================`);
 
     const tempPdf = path.join(os.tmpdir(), `worker-${jobId}.pdf`);
 
     try {
       // 1. Download PDF
-      let downloadUrl = job.storageUrl;
-      if (!downloadUrl.startsWith('http')) {
-        downloadUrl = `${config.backendUrl}${downloadUrl.startsWith('/') ? downloadUrl : '/' + downloadUrl}`;
-      }
-
+      console.log(`[Worker] Downloading document from ${downloadUrl}...`);
       const downloadRes = await axios.get(downloadUrl, {
         responseType: 'arraybuffer',
         timeout: 60000,
@@ -132,12 +140,13 @@ export class JobConsumer {
       });
 
       const pdfBuffer = Buffer.from(downloadRes.data);
+      console.log(`[Worker] Downloaded ${pdfBuffer.length} bytes successfully.`);
       await fs.promises.writeFile(tempPdf, pdfBuffer);
 
       // 2. On Windows, route directly through the official Windows print driver for 100% reliable printing
       if (process.platform === 'win32') {
         const winPrinter = process.env.WINDOWS_PRINTER_NAME || 'HP LaserJet Pro MFP M126nw';
-        console.log(`[Worker] Windows detected. Printing via Windows driver: "${winPrinter}"...`);
+        console.log(`[Worker] Printing via Windows driver: "${winPrinter}" -> sending to ${targetLanIp}...`);
         await this.updateStatus(jobId, 'PROCESSING', `Printing via Windows driver: ${winPrinter}...`);
 
         const printed = await this.printViaWindowsDriver(tempPdf, winPrinter, job.copies || 1);
@@ -148,6 +157,7 @@ export class JobConsumer {
 
           await this.waitForWindowsSpooler(winPrinter);
 
+          console.log(`[Worker] Physical print job completed on ${targetLanIp} via ${winPrinter}!`);
           await this.updateStatus(
             jobId,
             'COMPLETED',
@@ -156,7 +166,7 @@ export class JobConsumer {
             undefined,
             {
               verifiedAt: new Date(),
-              evidence: `Printed cleanly through official Windows HP driver (${winPrinter}).`,
+              evidence: `Printed cleanly through official Windows HP driver (${winPrinter}) on ${targetLanIp}.`,
               finalPrinterState: 'IDLE',
               sheetsPrinted: job.pageCount * (job.copies || 1),
             }
@@ -175,8 +185,7 @@ export class JobConsumer {
         orientation: job.orientation || 'AUTO',
       });
 
-      // Use local Wi-Fi printer IP (192.168.1.37)
-      const targetLanIp = config.defaultPrinterIp || (printer?.lanIp?.startsWith('192.168.') ? printer.lanIp : '192.168.1.37');
+      // Fallback network ports on local printer
       const targetPort = printer?.ippPort || 631;
       const targetEndpoint = printer?.ippEndpoint || '/ipp/printer';
 

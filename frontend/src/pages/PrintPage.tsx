@@ -257,20 +257,20 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
                 </span>
               </div>
 
-              {/* Sub-line 1: IP & Resolution */}
+              {/* Sub-line 1: Target info */}
               <div className="flex items-center gap-2 text-xs font-mono text-slate-300 flex-wrap">
                 <span className="flex items-center gap-1.5">
                   <Wifi className="h-3.5 w-3.5 text-cyan-400" />
-                  <span>{printer?.lanIp || '103.209.67.76'}:9100</span>
+                  <span>HP LaserJet Pro MFP M126nw</span>
                 </span>
                 <span className="text-cyan-400 font-bold">&bull;</span>
                 <span className="text-cyan-400 font-semibold">Native Laser PCLm Stream</span>
               </div>
 
-              {/* Sub-line 2: Pure Cloud */}
+              {/* Sub-line 2: Cloud Bridge */}
               <div className="flex items-center gap-1.5 text-xs text-slate-300 font-medium">
                 <ShieldCheck className="h-4 w-4 text-cyan-400 shrink-0" />
-                <span>Pure Cloud (No PC Needed)</span>
+                <span>Cloud Print Bridge Active</span>
               </div>
             </div>
           </div>
@@ -539,11 +539,11 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
               </div>
             </div>
 
-            {/* Bottom Row: Target IP & Print Document Now Button */}
+            {/* Bottom Row: Target info & Print Document Now Button */}
             <div className="pt-4 border-t border-blue-500/20 flex flex-col sm:flex-row items-center justify-between gap-4">
               <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
                 <Crosshair className="h-4 w-4 text-cyan-400 shrink-0" />
-                <span>Target IP: {printer?.lanIp || '103.209.67.76'}:9100 - Laser PCLm Stream</span>
+                <span>Target: HP LaserJet Pro MFP M126nw (Laser PCLm)</span>
               </div>
 
               <button
@@ -584,7 +584,7 @@ export const PrintPage: React.FC<PrintPageProps> = ({ onNavigateHistory }) => {
               </div>
               <h3 className="text-xl font-extrabold text-white mt-1">{activeJob.documentName}</h3>
               <div className="text-xs text-slate-400 mt-1 font-mono">
-                {activeJob.pageCount} page(s) &bull; {activeJob.copies} copy(ies) &bull; Target: {printer?.lanIp || '103.209.67.76'}
+                {activeJob.pageCount} page(s) &bull; {activeJob.copies} copy(ies) &bull; Target: HP LaserJet Pro MFP M126nw
               </div>
             </div>
             <div className="flex items-center gap-3">

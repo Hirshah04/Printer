@@ -123,7 +123,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab }) => 
             <div className="flex items-center gap-2.5 px-3.5 py-1.5 rounded-2xl bg-[#091230]/90 border border-blue-500/30 text-xs text-left font-mono">
               <Wifi className="h-4 w-4 text-cyan-400 shrink-0" />
               <div className="leading-tight">
-                <div className="text-white font-bold text-xs tracking-tight">192.168.1.37</div>
+                <div className="text-white font-bold text-xs tracking-tight">HP LaserJet M126nw</div>
                 <div className="text-[10px] text-slate-400">A4 &bull; {formatAckTime(printer?.lastAcknowledgementAt)}</div>
               </div>
             </div>

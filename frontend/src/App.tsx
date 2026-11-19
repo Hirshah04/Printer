@@ -23,11 +23,11 @@ export const App: React.FC = () => {
         <div className="max-w-6xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Shield className="h-4 w-4 text-emerald-400" />
-            <span>AirPrint Hub &bull; Target: HP LaserJet Pro MFP M126nw (103.209.67.76)</span>
+            <span>AirPrint Hub &bull; Target: HP LaserJet Pro MFP M126nw</span>
           </div>
           <div className="flex items-center gap-2">
             <Lock className="h-3.5 w-3.5 text-slate-400" />
-            <span>Direct Router Port Forwarding &bull; Port 9100</span>
+            <span>Secure Cloud Print Bridge &bull; Local Worker</span>
           </div>
         </div>
       </footer>
