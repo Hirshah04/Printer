@@ -197,12 +197,54 @@ export class JobConsumer {
       }
 
       // =========================================================================
-      // CASE 2: USB DISCONNECTED, WI-FI ACKNOWLEDGED -> USE WI-FI AT 600 DPI
+      // CASE 2: USB DISCONNECTED, WI-FI ACKNOWLEDGED -> USE WI-FI
       // =========================================================================
       if (wifiStatus.connected) {
-        console.log(`[Worker] USB is disconnected. Wi-Fi acknowledged (${targetLanIp}:${targetPort}, ${wifiStatus.state}) -> using Wi-Fi at 600 DPI for job ${jobId}.`);
-        await this.updateStatus(jobId, 'PROCESSING', 'Generating native 600 DPI A4 PCLm stream for Wi-Fi printing...');
+        console.log(`[Worker] USB is disconnected. Wi-Fi acknowledged (${targetLanIp}:${targetPort}, ${wifiStatus.state}) -> using Wi-Fi for job ${jobId}.`);
+        await this.updateStatus(jobId, 'PROCESSING', `Printing via Wi-Fi at 600 DPI (${targetLanIp})...`);
 
+        // Priority 1 on Windows: Official HP driver on TCP/IP port (Hewlett-Packard HP LaserJet Pro MFP M126nw)
+        if (process.platform === 'win32') {
+          const wifiPrinters = [
+            'Hewlett-Packard HP LaserJet Pro MFP M126nw',
+            'HP LaserJet Pro MFP M126nw',
+          ];
+
+          let printed = false;
+          let usedPrinter = '';
+          for (const winPrinter of wifiPrinters) {
+            console.log(`[Worker] Submitting document via Windows Driver to "${winPrinter}" over Wi-Fi...`);
+            printed = await this.printViaWindowsDriver(tempPdf, winPrinter, job.copies || 1);
+            if (printed) {
+              usedPrinter = winPrinter;
+              break;
+            }
+          }
+
+          if (printed) {
+            printerJobId = `WIN-WIFI-${Date.now().toString().slice(-4)}`;
+            isSubmitted = true;
+            methodUsed = `Wi-Fi Windows Driver (${usedPrinter})`;
+            await this.waitForWindowsSpooler(usedPrinter);
+
+            await this.updateStatus(
+              jobId,
+              'COMPLETED',
+              `Document physically printed via Wi-Fi on ${usedPrinter}.`,
+              printerJobId,
+              undefined,
+              {
+                verifiedAt: new Date(),
+                evidence: `Native vector print delivered to Wi-Fi printer (${usedPrinter}) on port IP_${targetLanIp}.`,
+                finalPrinterState: 'IDLE',
+                sheetsPrinted: job.pageCount * (job.copies || 1),
+              }
+            );
+            return;
+          }
+        }
+
+        // Fallback for non-Windows or if Windows print helper failed
         const conversion = await pclmConverter.convertPdfToPclm(pdfBuffer, {
           paperSize: job.paperSize || 'A4',
           resolutionDpi: 600, // 600 DPI strictly matching HP laser hardware
@@ -257,22 +299,7 @@ export class JobConsumer {
             methodUsed = 'Wi-Fi HP JetDirect RAW Port 9100 @ 600 DPI';
             console.log(`[Worker] RAW 600 DPI stream successfully delivered to ${targetLanIp}:9100!`);
           } catch (rawErr: any) {
-            console.warn(`[Worker] RAW port 9100 failed: ${rawErr.message}. Trying Wi-Fi Windows driver...`);
-          }
-        }
-
-        // Protocol 3: Fallback to Wi-Fi Windows driver
-        if (!isSubmitted && process.platform === 'win32') {
-          const wifiWinPrinter = 'HP LaserJet Pro MFP M126nw';
-          console.log(`[Worker] Fallback: Printing via Wi-Fi Windows driver: "${wifiWinPrinter}"...`);
-          await this.updateStatus(jobId, 'PROCESSING', `Printing via Wi-Fi Windows driver: ${wifiWinPrinter}...`);
-
-          const printed = await this.printViaWindowsDriver(tempPdf, wifiWinPrinter, job.copies || 1);
-          if (printed) {
-            printerJobId = `WIN-WIFI-${Date.now().toString().slice(-4)}`;
-            isSubmitted = true;
-            methodUsed = `Wi-Fi Windows Driver (${wifiWinPrinter})`;
-            await this.waitForWindowsSpooler(wifiWinPrinter);
+            console.warn(`[Worker] RAW port 9100 failed: ${rawErr.message}.`);
           }
         }
       }

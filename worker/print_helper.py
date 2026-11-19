@@ -49,6 +49,23 @@ class BITMAPINFO(ctypes.Structure):
     ]
 
 
+def ensure_printer_online(printer_name):
+    """
+    Ensure printer is not set to WORK_OFFLINE in Windows Spooler.
+    """
+    try:
+        import win32print
+        h = win32print.OpenPrinter(printer_name, {'DesiredAccess': win32print.PRINTER_ALL_ACCESS})
+        info = win32print.GetPrinter(h, 2)
+        if info.get('Attributes', 0) & win32print.PRINTER_ATTRIBUTE_WORK_OFFLINE:
+            info['Attributes'] = info['Attributes'] & ~win32print.PRINTER_ATTRIBUTE_WORK_OFFLINE
+            win32print.SetPrinter(h, 2, info, 0)
+            print(f"[PrintHelper] Cleared WORK_OFFLINE attribute for '{printer_name}' [ONLINE]", flush=True)
+        win32print.ClosePrinter(h)
+    except Exception:
+        pass
+
+
 def detect_active_connection():
     """
     Detect whether the printer is physically connected via USB or Wi-Fi:
@@ -93,10 +110,12 @@ def detect_active_connection():
                     port = str(info.get('pPortName', ''))
                     win32print.ClosePrinter(h)
                     if port.upper().startswith('USB'):
+                        ensure_printer_online(name)
                         print(f"[PrintHelper] Connection Check: USB is PHYSICALLY CONNECTED -> '{name}' on {port}", flush=True)
                         return 'usb', name, port
         except Exception:
             pass
+        ensure_printer_online('Hewlett-Packard HP LaserJet Pro MFP M126nw (Copy 1)')
         print("[PrintHelper] Connection Check: USB is PHYSICALLY CONNECTED -> 'Hewlett-Packard HP LaserJet Pro MFP M126nw (Copy 1)' on USB001", flush=True)
         return 'usb', 'Hewlett-Packard HP LaserJet Pro MFP M126nw (Copy 1)', 'USB001'
 
@@ -117,15 +136,24 @@ def detect_active_connection():
     if wifi_reachable:
         try:
             installed = win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)
+            # Prioritize official HP driver on TCP/IP port (Hewlett-Packard HP LaserJet Pro MFP M126nw)
+            for p in installed:
+                name = p[2]
+                if 'hewlett' in name.lower() and 'copy' not in name.lower():
+                    ensure_printer_online(name)
+                    print(f"[PrintHelper] Connection Check: USB disconnected. Wi-Fi is REACHABLE ({target_ip}:631) -> '{name}'", flush=True)
+                    return 'wifi', name, f"{target_ip}:631"
             for p in installed:
                 name = p[2]
                 if ('laserjet' in name.lower() or 'm126' in name.lower()) and 'copy' not in name.lower():
+                    ensure_printer_online(name)
                     print(f"[PrintHelper] Connection Check: USB disconnected. Wi-Fi is REACHABLE ({target_ip}:631) -> '{name}'", flush=True)
                     return 'wifi', name, f"{target_ip}:631"
         except Exception:
             pass
-        print(f"[PrintHelper] Connection Check: USB disconnected. Wi-Fi is REACHABLE ({target_ip}:631) -> 'HP LaserJet Pro MFP M126nw'", flush=True)
-        return 'wifi', 'HP LaserJet Pro MFP M126nw', f"{target_ip}:631"
+        ensure_printer_online('Hewlett-Packard HP LaserJet Pro MFP M126nw')
+        print(f"[PrintHelper] Connection Check: USB disconnected. Wi-Fi is REACHABLE ({target_ip}:631) -> 'Hewlett-Packard HP LaserJet Pro MFP M126nw'", flush=True)
+        return 'wifi', 'Hewlett-Packard HP LaserJet Pro MFP M126nw', f"{target_ip}:631"
 
     print("[PrintHelper] Connection Check: Neither USB nor Wi-Fi printer detected!", flush=True)
     return 'none', None, None
@@ -143,37 +171,60 @@ def find_printer(requested_name):
         import win32print
         installed = [p[2] for p in win32print.EnumPrinters(2)]
 
+        resolved = None
+
         if not requested_name or requested_name.lower() in ('auto', 'detect', ''):
             conn_type, detected_name, _ = detect_active_connection()
             if detected_name:
-                return detected_name
-            requested_name = 'HP LaserJet Pro MFP M126nw'
+                resolved = detected_name
+            else:
+                requested_name = 'Hewlett-Packard HP LaserJet Pro MFP M126nw'
 
         # 1. Exact match first
-        if requested_name in installed:
-            return requested_name
+        if not resolved and requested_name in installed:
+            resolved = requested_name
 
         # 2. Case-insensitive match
-        for p in installed:
-            if p.lower() == requested_name.lower():
-                return p
+        if not resolved:
+            for p in installed:
+                if p.lower() == requested_name.lower():
+                    resolved = p
+                    break
 
         # 3. If USB requested or prefer USB connection
-        if 'usb' in requested_name.lower():
+        if not resolved and 'usb' in requested_name.lower():
             for p in installed:
-                if 'copy' in p.lower() or 'hewlett' in p.lower():
-                    return p
+                if 'copy' in p.lower() or ('hewlett' in p.lower() and 'usb' in p.lower()):
+                    resolved = p
+                    break
 
         # 4. If Wi-Fi requested
-        if 'wifi' in requested_name.lower():
+        if not resolved and 'wifi' in requested_name.lower():
             for p in installed:
-                if 'copy' not in p.lower() and ('laserjet' in p.lower() or 'm126' in p.lower()):
-                    return p
+                if 'hewlett' in p.lower() and 'copy' not in p.lower():
+                    resolved = p
+                    break
+            if not resolved:
+                for p in installed:
+                    if 'copy' not in p.lower() and ('laserjet' in p.lower() or 'm126' in p.lower()):
+                        resolved = p
+                        break
 
-        # 5. Fuzzy match for LaserJet
-        for p in installed:
-            if 'm126' in p.lower() or 'laserjet' in p.lower():
-                return p
+        # 5. Fuzzy match for LaserJet (prefer official HP driver)
+        if not resolved:
+            for p in installed:
+                if 'hewlett' in p.lower() and 'copy' not in p.lower():
+                    resolved = p
+                    break
+            if not resolved:
+                for p in installed:
+                    if 'm126' in p.lower() or 'laserjet' in p.lower():
+                        resolved = p
+                        break
+
+        if resolved:
+            ensure_printer_online(resolved)
+            return resolved
 
         print(f"ERROR: No printer found for '{requested_name}'. Installed: {installed}", file=sys.stderr)
         return None
