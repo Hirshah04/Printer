@@ -30,6 +30,12 @@ export class JobConsumer {
     console.log(`[Worker] Started Cloud Print Worker: ${config.workerId}`);
     console.log(`[Worker] Connected to Backend: ${config.backendUrl}`);
 
+    const usbStatus = await this.checkUsbConnection();
+    const wifiConnected = await this.checkWifiConnection(config.defaultPrinterIp || '192.168.1.37', 631);
+    console.log(`[Worker] Active Hardware Interfaces:`);
+    console.log(`  - USB  : ${usbStatus.connected ? `CONNECTED ("${usbStatus.printerName}" on ${usbStatus.port}) -> [PRIMARY ROUTE]` : 'DISCONNECTED / OFFLINE'}`);
+    console.log(`  - Wi-Fi: ${wifiConnected ? `REACHABLE (${config.defaultPrinterIp || '192.168.1.37'}:631) -> [FALLBACK @ 600 DPI]` : 'UNREACHABLE'}`);
+
     await this.sendHeartbeat();
     await this.reportPrinterStatus();
     setInterval(() => this.sendHeartbeat(), config.heartbeatIntervalMs);
@@ -121,11 +127,21 @@ export class JobConsumer {
       downloadUrl = `${config.backendUrl}${downloadUrl.startsWith('/') ? downloadUrl : '/' + downloadUrl}`;
     }
 
+    const usbStatus = await this.checkUsbConnection();
+    const targetPort = printer?.ippPort || 631;
+    const targetEndpoint = printer?.ippEndpoint || '/ipp/printer';
+    const wifiConnected = await this.checkWifiConnection(targetLanIp, targetPort);
+
     console.log(`=====================================================================`);
     console.log(`📥 [Worker] NEW PRINT JOB RECEIVED: "${job.documentName}" (${job.pageCount} p, ${job.copies || 1}x)`);
     console.log(`🔗 [Worker] FETCHING FILE FROM   : ${downloadUrl}`);
-    console.log(`🖨️ [Worker] TARGET PRINTER IP    : ${targetLanIp}`);
-    console.log(`🔌 [Worker] TARGET PORT / DRIVER : Windows Driver (TCP/IP 192.168.1.37:9100) / IPP 631`);
+    if (usbStatus.connected) {
+      console.log(`🔌 [Worker] ACTIVE ROUTE         : USB DIRECT ("${usbStatus.printerName}" on ${usbStatus.port}) [PRIORITY]`);
+    } else if (wifiConnected) {
+      console.log(`📡 [Worker] ACTIVE ROUTE         : WI-FI DIRECT (${targetLanIp}:${targetPort}) @ 600 DPI`);
+    } else {
+      console.log(`⚠️ [Worker] ACTIVE ROUTE         : NO PRINTER DETECTED`);
+    }
     console.log(`=====================================================================`);
 
     const tempPdf = path.join(os.tmpdir(), `worker-${jobId}.pdf`);
@@ -142,17 +158,6 @@ export class JobConsumer {
       const pdfBuffer = Buffer.from(downloadRes.data);
       console.log(`[Worker] Downloaded ${pdfBuffer.length} bytes successfully.`);
       await fs.promises.writeFile(tempPdf, pdfBuffer);
-
-      // 2. Connection Check: Check USB first, then Wi-Fi
-      console.log(`[Worker] Checking printer connection status (USB vs Wi-Fi)...`);
-      const usbStatus = await this.checkUsbConnection();
-      const targetPort = printer?.ippPort || 631;
-      const targetEndpoint = printer?.ippEndpoint || '/ipp/printer';
-      const wifiConnected = await this.checkWifiConnection(targetLanIp, targetPort);
-
-      console.log(`[Worker] Connection Check Status:`);
-      console.log(`  - USB  : ${usbStatus.connected ? `CONNECTED (${usbStatus.printerName} on ${usbStatus.port})` : 'DISCONNECTED / OFFLINE'}`);
-      console.log(`  - Wi-Fi: ${wifiConnected ? `REACHABLE (${targetLanIp}:${targetPort})` : 'UNREACHABLE'}`);
 
       let isSubmitted = false;
       let printerJobId = '';

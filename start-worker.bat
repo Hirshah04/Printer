@@ -7,10 +7,8 @@ echo           AIRPRINT HUB - LOCAL PRINT WORKER DAEMON
 echo =====================================================================
 echo.
 echo   Cloud Backend  : https://printer-8bki.onrender.com
-echo   Target Printer : HP LaserJet Pro MFP M126nw (192.168.1.37)
-echo   Local Protocol : Windows GDI Driver / IPP Port 631 / Port 9100
-echo.
 echo   Architecture   : Cloud (Vercel + Render) ^<--- HTTPS ---^> Local Worker
+echo   Connection Mode: Automatic (USB Priority / Wi-Fi Fallback at 600 DPI)
 echo =====================================================================
 echo.
 
@@ -27,7 +25,7 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-:: 2. Check Python and Dependencies for Windows GDI Print Bridge
+:: 2. Check Python and Dependencies for Windows Print Bridge
 where python >nul 2>&1
 if %ERRORLEVEL% equ 0 (
     python -c "import fitz, win32print, PIL" >nul 2>&1
@@ -36,8 +34,7 @@ if %ERRORLEVEL% equ 0 (
         pip install --quiet pymupdf pywin32 pillow
     )
 ) else (
-    echo [WARNING] Python not detected in PATH. Windows GDI driver printing requires Python.
-    echo Fallback to direct network port streaming will be used.
+    echo [WARNING] Python not detected in PATH.
 )
 
 :: 3. Ensure native SumatraPDF vector print engine exists
@@ -53,11 +50,14 @@ if not exist "node_modules" (
     call npm install
 )
 
-if not exist "dist\index.js" (
-    echo [*] Compiling worker TypeScript...
-    call npm run build
-)
+echo [*] Compiling worker TypeScript to ensure latest updates...
+call npm run build
 
+:: 5. Pre-flight connection detection
+echo [*] Checking active printer hardware connection...
+python -c "import sys; sys.path.append('.'); import print_helper; print_helper.detect_active_connection()"
+
+echo.
 echo [*] Starting local worker daemon...
 echo.
 node dist/index.js
