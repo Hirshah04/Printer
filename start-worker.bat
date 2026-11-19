@@ -27,12 +27,12 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-:: 2. Check Python & Dependencies (for Windows GDI Print Bridge)
+:: 2. Check Python and Dependencies for Windows GDI Print Bridge
 where python >nul 2>&1
 if %ERRORLEVEL% equ 0 (
     python -c "import fitz, win32print, PIL" >nul 2>&1
     if %ERRORLEVEL% neq 0 (
-        echo [*] Installing required Python print packages (PyMuPDF, pywin32, Pillow)...
+        echo [*] Installing required Python print packages: pymupdf, pywin32, pillow...
         pip install --quiet pymupdf pywin32 pillow
     )
 ) else (
