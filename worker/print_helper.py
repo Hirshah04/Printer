@@ -10,6 +10,15 @@ import sys
 import os
 import io
 
+# Ensure UTF-8 output encoding on Windows consoles
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
+
 def find_printer(printer_name):
     """Find exact or best matching installed Windows printer name."""
     try:
@@ -131,7 +140,7 @@ def print_pdf(pdf_path, printer_name, copies=1):
 
     try:
         if method_pymupdf_gdi(pdf_path, printer_name, copies=copies):
-            print("[PrintHelper] SUCCESS via Windows GDI printer pipeline ✓", flush=True)
+            print("[PrintHelper] SUCCESS via Windows GDI printer pipeline [OK]", flush=True)
             sys.exit(0)
     except Exception as e:
         print(f"[PrintHelper] GDI method failed: {e}", file=sys.stderr)
