@@ -214,7 +214,7 @@ export class JobConsumer {
 
       // Protocol 3: Fallback to Windows GDI driver
       if (!isSubmitted && process.platform === 'win32') {
-        const winPrinter = process.env.WINDOWS_PRINTER_NAME || 'HP LaserJet Pro MFP M126nw';
+        const winPrinter = process.env.WINDOWS_PRINTER_NAME || 'Hewlett-Packard HP LaserJet Pro MFP M126nw (Copy 1)';
         console.log(`[Worker] Fallback: Printing via Windows driver: "${winPrinter}"...`);
         await this.updateStatus(jobId, 'PROCESSING', `Printing via Windows driver: ${winPrinter}...`);
 

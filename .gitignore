@@ -25,3 +25,11 @@ Thumbs.db
 # Uploads directory (local development file storage)
 backend/uploads/*
 !backend/uploads/.gitkeep
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Native worker tools
+worker/bin/

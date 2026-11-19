@@ -40,7 +40,14 @@ if %ERRORLEVEL% equ 0 (
     echo Fallback to direct network port streaming will be used.
 )
 
-:: 3. Check dependencies and build
+:: 3. Ensure native SumatraPDF vector print engine exists
+if not exist "bin\SumatraPDF.exe" (
+    echo [*] Setting up native vector print engine: SumatraPDF...
+    if not exist "bin" mkdir "bin"
+    powershell -Command "try { Invoke-WebRequest -Uri 'https://www.sumatrapdfreader.org/dl/rel/3.6.1/SumatraPDF-3.6.1-64.zip' -OutFile 'sumatra_tmp.zip' -UseBasicParsing; Expand-Archive -Path 'sumatra_tmp.zip' -DestinationPath 'bin' -Force; Move-Item -Path 'bin\SumatraPDF*.exe' -Destination 'bin\SumatraPDF.exe' -Force; Remove-Item 'sumatra_tmp.zip' -Force; echo '[*] SumatraPDF vector print engine ready.' } catch { echo '[WARNING] Could not auto-download SumatraPDF. Fallback to GDI will be used.' }"
+)
+
+:: 4. Check dependencies and build
 if not exist "node_modules" (
     echo [*] Installing worker npm dependencies...
     call npm install
