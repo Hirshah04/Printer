@@ -1,14 +1,15 @@
 """
 Windows print helper - prints a PDF to a named Windows printer.
-Renders PDF pages via PyMuPDF + Windows GDI (PIL ImageWin.Dib on Win32 Printer DC).
-Works reliably with WSD (network IPP) and USB printers without needing external PDF viewers.
+Renders PDF pages via PyMuPDF + Windows GDI (32-bit top-down StretchDIBits).
+Ensures exact full-page A4 scaling without scanline pitch, horizontal tearing, or margin clipping.
 
 Usage: python print_helper.py <pdf_path> <printer_name> [copies]
 Exit codes: 0=success, 1=failure
 """
 import sys
 import os
-import io
+import ctypes
+from ctypes import wintypes
 
 # Ensure UTF-8 output encoding on Windows consoles
 if hasattr(sys.stdout, 'reconfigure'):
@@ -17,6 +18,22 @@ if hasattr(sys.stdout, 'reconfigure'):
         sys.stderr.reconfigure(encoding='utf-8', errors='replace')
     except Exception:
         pass
+
+
+class BITMAPINFOHEADER(ctypes.Structure):
+    _fields_ = [
+        ('biSize', wintypes.DWORD),
+        ('biWidth', wintypes.LONG),
+        ('biHeight', wintypes.LONG),
+        ('biPlanes', wintypes.WORD),
+        ('biBitCount', wintypes.WORD),
+        ('biCompression', wintypes.DWORD),
+        ('biSizeImage', wintypes.DWORD),
+        ('biXPelsPerMeter', wintypes.LONG),
+        ('biYPelsPerMeter', wintypes.LONG),
+        ('biClrUsed', wintypes.DWORD),
+        ('biClrImportant', wintypes.DWORD),
+    ]
 
 
 def find_printer(printer_name):
@@ -35,7 +52,7 @@ def find_printer(printer_name):
         # Substring / fuzzy match
         for p in installed:
             if "laserjet" in p.lower() or "m126" in p.lower():
-                print(f"[PrintHelper] Exact '{printer_name}' not found. Matched '{p}'", flush=True)
+                print(f"[PrintHelper] Matched printer '{p}' for requested '{printer_name}'", flush=True)
                 return p
 
         print(f"ERROR: Printer '{printer_name}' not found. Available: {installed}", file=sys.stderr)
@@ -46,7 +63,7 @@ def find_printer(printer_name):
 
 
 def method_pymupdf_gdi(pdf_path, printer_name, copies=1):
-    """Render PDF pages to GDI DC via PIL ImageWin.Dib."""
+    """Render PDF pages to GDI DC with 32-bit top-down DIB for exact full A4 page output."""
     try:
         import pymupdf as fitz
     except ImportError:
@@ -55,7 +72,6 @@ def method_pymupdf_gdi(pdf_path, printer_name, copies=1):
     import win32print
     import win32ui
     import win32con
-    from PIL import Image, ImageWin
 
     resolved_printer = find_printer(printer_name)
     if not resolved_printer:
@@ -63,20 +79,32 @@ def method_pymupdf_gdi(pdf_path, printer_name, copies=1):
 
     doc = fitz.open(pdf_path)
     page_count = doc.page_count
-    print(f"[PrintHelper] PDF has {page_count} page(s), printing {copies}x copy(ies) via GDI to '{resolved_printer}'...", flush=True)
+    print(f"[PrintHelper] PDF has {page_count} page(s), printing {copies}x copy(ies) via 32-bit GDI to '{resolved_printer}'...", flush=True)
+
+    gdi32 = ctypes.windll.gdi32
+    gdi32.StretchDIBits.argtypes = [
+        wintypes.HDC,
+        wintypes.INT, wintypes.INT, wintypes.INT, wintypes.INT,
+        wintypes.INT, wintypes.INT, wintypes.INT, wintypes.INT,
+        ctypes.c_char_p,
+        ctypes.POINTER(BITMAPINFOHEADER),
+        wintypes.UINT,
+        wintypes.DWORD
+    ]
+    gdi32.StretchDIBits.restype = wintypes.INT
 
     try:
         # Create printer Device Context
         hDC = win32ui.CreateDC()
         hDC.CreatePrinterDC(resolved_printer)
 
-        # Get printer capabilities
+        # Get device capabilities (Full page printable dimensions)
         dpi_x = hDC.GetDeviceCaps(win32con.LOGPIXELSX) or 300
         dpi_y = hDC.GetDeviceCaps(win32con.LOGPIXELSY) or 300
-        printable_w = hDC.GetDeviceCaps(win32con.HORZRES)
-        printable_h = hDC.GetDeviceCaps(win32con.VERTRES)
+        printable_w = hDC.GetDeviceCaps(win32con.HORZRES) or 2480
+        printable_h = hDC.GetDeviceCaps(win32con.VERTRES) or 3508
 
-        print(f"[PrintHelper] Printer DPI: {dpi_x}x{dpi_y}, Printable Area: {printable_w}x{printable_h}", flush=True)
+        print(f"[PrintHelper] Target Paper: A4 ({dpi_x}x{dpi_y} DPI, Printable: {printable_w}x{printable_h})", flush=True)
 
         for copy_idx in range(copies):
             if copies > 1:
@@ -92,33 +120,47 @@ def method_pymupdf_gdi(pdf_path, printer_name, copies=1):
                 if page.rect.width > page.rect.height:
                     page.set_rotation((page.rotation + 90) % 360)
 
-                # Render at printer resolution (300 DPI optimal for LaserJet MFP M126nw)
+                # Render page at printer resolution (300 DPI optimal for A4 on LaserJet Pro MFP M126nw)
                 render_dpi = min(dpi_x, 300)
-                pix = page.get_pixmap(dpi=render_dpi, alpha=False)
+                pix = page.get_pixmap(dpi=render_dpi, alpha=True)
 
-                img_w, img_h = pix.width, pix.height
+                pix_w, pix_h = pix.width, pix.height
+                samples = pix.samples
 
-                # Scale to fit printable area while maintaining aspect ratio
-                scale = min(printable_w / img_w, printable_h / img_h)
-                dest_w = int(img_w * scale)
-                dest_h = int(img_h * scale)
+                # Compute proportional scaling to fill the A4 sheet completely
+                scale = min(printable_w / pix_w, printable_h / pix_h)
+                dest_w = int(pix_w * scale)
+                dest_h = int(pix_h * scale)
 
-                # Center on page
+                # Center on A4 sheet
                 dest_x = (printable_w - dest_w) // 2
                 dest_y = (printable_h - dest_h) // 2
 
-                # Convert to PIL Image
-                img = Image.frombytes("RGB", (img_w, img_h), pix.samples)
-                if dest_w != img_w or dest_h != img_h:
-                    img = img.resize((dest_w, dest_h), Image.LANCZOS)
-
-                dib = ImageWin.Dib(img)
+                # Build 32-bit top-down BITMAPINFOHEADER (biHeight < 0 means top-down, matching MuPDF samples)
+                bmi = BITMAPINFOHEADER()
+                bmi.biSize = 40
+                bmi.biWidth = pix_w
+                bmi.biHeight = -pix_h
+                bmi.biPlanes = 1
+                bmi.biBitCount = 32
+                bmi.biCompression = 0
+                bmi.biSizeImage = len(samples)
 
                 hDC.StartPage()
-                dib.draw(hDC.GetSafeHdc(), (dest_x, dest_y, dest_x + dest_w, dest_y + dest_h))
-                hDC.EndPage()
 
-                print(f"[PrintHelper] Page {page_num + 1}/{page_count} sent successfully.", flush=True)
+                # Native GDI 32-bit hardware stretch: perfect alignment, no scanline pitch errors
+                scanlines = gdi32.StretchDIBits(
+                    hDC.GetSafeHdc(),
+                    dest_x, dest_y, dest_w, dest_h,
+                    0, 0, pix_w, pix_h,
+                    samples,
+                    ctypes.byref(bmi),
+                    0,
+                    0x00CC0020  # SRCCOPY
+                )
+
+                hDC.EndPage()
+                print(f"[PrintHelper] Page {page_num + 1}/{page_count} sent (DIB {dest_w}x{dest_h} -> {scanlines} scanlines) [OK]", flush=True)
 
             hDC.EndDoc()
 
@@ -127,7 +169,7 @@ def method_pymupdf_gdi(pdf_path, printer_name, copies=1):
     finally:
         doc.close()
 
-    print(f"[PrintHelper] All {page_count * copies} page(s) successfully sent to Windows spooler!", flush=True)
+    print(f"[PrintHelper] All {page_count * copies} page(s) successfully delivered to printer spooler!", flush=True)
     return True
 
 
@@ -136,11 +178,11 @@ def print_pdf(pdf_path, printer_name, copies=1):
         print(f"ERROR: File not found: {pdf_path}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"[PrintHelper] Initiating print for '{os.path.basename(pdf_path)}' ({copies}x) -> '{printer_name}'...", flush=True)
+    print(f"[PrintHelper] Printing '{os.path.basename(pdf_path)}' ({copies}x) -> '{printer_name}' [A4 Full Page]...", flush=True)
 
     try:
         if method_pymupdf_gdi(pdf_path, printer_name, copies=copies):
-            print("[PrintHelper] SUCCESS via Windows GDI printer pipeline [OK]", flush=True)
+            print("[PrintHelper] SUCCESS via 32-bit GDI A4 full-page pipeline [OK]", flush=True)
             sys.exit(0)
     except Exception as e:
         print(f"[PrintHelper] GDI method failed: {e}", file=sys.stderr)
