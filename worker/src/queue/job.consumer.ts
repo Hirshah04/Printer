@@ -143,92 +143,142 @@ export class JobConsumer {
       console.log(`[Worker] Downloaded ${pdfBuffer.length} bytes successfully.`);
       await fs.promises.writeFile(tempPdf, pdfBuffer);
 
-      // 1. Primary Method: Direct Native IPP Port 631 (standard AirPrint hardware protocol)
-      // Generates 100% clean, standardized ISO A4 PCLm stream and delivers directly to printer hardware.
-      await this.updateStatus(jobId, 'PROCESSING', 'Generating native A4 PCLm raster stream...');
-
-      const conversion = await pclmConverter.convertPdfToPclm(pdfBuffer, {
-        paperSize: job.paperSize || 'A4',
-        resolutionDpi: 300,
-        orientation: job.orientation || 'AUTO',
-      });
-
+      // 2. Connection Check: Check USB first, then Wi-Fi
+      console.log(`[Worker] Checking printer connection status (USB vs Wi-Fi)...`);
+      const usbStatus = await this.checkUsbConnection();
       const targetPort = printer?.ippPort || 631;
       const targetEndpoint = printer?.ippEndpoint || '/ipp/printer';
+      const wifiConnected = await this.checkWifiConnection(targetLanIp, targetPort);
 
-      await this.updateStatus(jobId, 'SENT_TO_PRINTER', `Submitting document to ${targetLanIp}:${targetPort}...`);
+      console.log(`[Worker] Connection Check Status:`);
+      console.log(`  - USB  : ${usbStatus.connected ? `CONNECTED (${usbStatus.printerName} on ${usbStatus.port})` : 'DISCONNECTED / OFFLINE'}`);
+      console.log(`  - Wi-Fi: ${wifiConnected ? `REACHABLE (${targetLanIp}:${targetPort})` : 'UNREACHABLE'}`);
 
       let isSubmitted = false;
       let printerJobId = '';
       let methodUsed = '';
 
-      // Protocol 1: IPP Port 631
-      try {
-        console.log(`[Worker] Submitting PCLm document via IPP Port 631 to ${targetLanIp}:${targetPort}${targetEndpoint}...`);
-        const ippRes = await ippClient.submitJob(
-          targetLanIp,
-          targetPort,
-          targetEndpoint,
-          conversion.buffer,
+      // =========================================================================
+      // CASE 1: USB IS CONNECTED -> USE USB ONLY
+      // =========================================================================
+      if (usbStatus.connected && usbStatus.printerName) {
+        console.log(`[Worker] USB is connected -> using USB ONLY for job ${jobId}.`);
+        await this.updateStatus(jobId, 'PROCESSING', `Printing via USB (${usbStatus.printerName})...`);
+
+        const printed = await this.printViaWindowsDriver(tempPdf, usbStatus.printerName, job.copies || 1);
+        if (!printed) {
+          throw new Error(`Failed to print document via USB connection (${usbStatus.printerName}).`);
+        }
+
+        printerJobId = `USB-${Date.now().toString().slice(-4)}`;
+        isSubmitted = true;
+        methodUsed = `USB Direct (${usbStatus.printerName})`;
+        await this.waitForWindowsSpooler(usbStatus.printerName);
+
+        await this.updateStatus(
+          jobId,
+          'COMPLETED',
+          `Document physically printed via USB on ${usbStatus.printerName}.`,
+          printerJobId,
+          undefined,
           {
-            documentName: job.documentName,
-            copies: job.copies || 1,
-            paperSize: job.paperSize || 'A4',
-            orientation: job.orientation || 'AUTO',
-            format: 'application/PCLm',
+            verifiedAt: new Date(),
+            evidence: `Native vector print delivered to USB printer (${usbStatus.printerName}) on port ${usbStatus.port}.`,
+            finalPrinterState: 'IDLE',
+            sheetsPrinted: job.pageCount * (job.copies || 1),
           }
         );
-
-        if (ippRes.success) {
-          printerJobId = ippRes.printerJobId || `IPP-${Date.now().toString().slice(-4)}`;
-          isSubmitted = true;
-          methodUsed = `IPP Port 631 (${printerJobId})`;
-          console.log(`[Worker] Job accepted via IPP Port 631 with ID: ${printerJobId}`);
-        } else {
-          console.warn(`[Worker] IPP Port 631 rejected: ${ippRes.error}. Trying RAW Port 9100...`);
-        }
-      } catch (ippErr: any) {
-        console.warn(`[Worker] IPP Port 631 error: ${ippErr.message}. Trying RAW Port 9100...`);
+        return;
       }
 
-      // Protocol 2: Fallback to Direct HP JetDirect RAW Socket (Port 9100)
-      if (!isSubmitted) {
+      // =========================================================================
+      // CASE 2: USB NOT CONNECTED, WI-FI IS CONNECTED -> USE WI-FI AT 600 DPI
+      // =========================================================================
+      if (wifiConnected) {
+        console.log(`[Worker] USB is not connected. Wi-Fi reachable -> using Wi-Fi at 600 DPI for job ${jobId}.`);
+        await this.updateStatus(jobId, 'PROCESSING', 'Generating native 600 DPI A4 PCLm stream for Wi-Fi printing...');
+
+        const conversion = await pclmConverter.convertPdfToPclm(pdfBuffer, {
+          paperSize: job.paperSize || 'A4',
+          resolutionDpi: 600, // 600 DPI for hardware engine full A4 matching
+          orientation: job.orientation || 'AUTO',
+        });
+
+        await this.updateStatus(jobId, 'SENT_TO_PRINTER', `Submitting 600 DPI document to Wi-Fi ${targetLanIp}:${targetPort}...`);
+
+        // Protocol 1: IPP Port 631 @ 600 DPI
         try {
-          console.log(`[Worker] Streaming to HP JetDirect RAW port 9100 on ${targetLanIp}...`);
-          await this.streamToRawPort(
+          console.log(`[Worker] Submitting 600 DPI PCLm via IPP Port 631 to ${targetLanIp}:${targetPort}${targetEndpoint}...`);
+          const ippRes = await ippClient.submitJob(
             targetLanIp,
-            9100,
+            targetPort,
+            targetEndpoint,
             conversion.buffer,
-            job.documentName,
-            job.paperSize || 'A4',
-            job.copies || 1
+            {
+              documentName: job.documentName,
+              copies: job.copies || 1,
+              paperSize: job.paperSize || 'A4',
+              orientation: job.orientation || 'AUTO',
+              format: 'application/PCLm',
+            }
           );
-          printerJobId = `RAW-${Date.now().toString().slice(-4)}`;
-          isSubmitted = true;
-          methodUsed = 'HP JetDirect RAW Port 9100';
-          console.log(`[Worker] RAW stream successfully delivered to ${targetLanIp}:9100!`);
-        } catch (rawErr: any) {
-          console.warn(`[Worker] RAW port 9100 failed: ${rawErr.message}. Trying Windows driver...`);
+
+          if (ippRes.success) {
+            printerJobId = ippRes.printerJobId || `IPP-${Date.now().toString().slice(-4)}`;
+            isSubmitted = true;
+            methodUsed = `Wi-Fi IPP Port 631 @ 600 DPI (${printerJobId})`;
+            console.log(`[Worker] Job accepted via Wi-Fi IPP Port 631 (600 DPI) with ID: ${printerJobId}`);
+          } else {
+            console.warn(`[Worker] IPP Port 631 rejected: ${ippRes.error}. Trying RAW Port 9100...`);
+          }
+        } catch (ippErr: any) {
+          console.warn(`[Worker] IPP Port 631 error: ${ippErr.message}. Trying RAW Port 9100...`);
+        }
+
+        // Protocol 2: Fallback to RAW Port 9100 @ 600 DPI
+        if (!isSubmitted) {
+          try {
+            console.log(`[Worker] Streaming 600 DPI stream to HP JetDirect RAW port 9100 on ${targetLanIp}...`);
+            await this.streamToRawPort(
+              targetLanIp,
+              9100,
+              conversion.buffer,
+              job.documentName,
+              job.paperSize || 'A4',
+              job.copies || 1
+            );
+            printerJobId = `RAW-${Date.now().toString().slice(-4)}`;
+            isSubmitted = true;
+            methodUsed = 'Wi-Fi HP JetDirect RAW Port 9100 @ 600 DPI';
+            console.log(`[Worker] RAW 600 DPI stream successfully delivered to ${targetLanIp}:9100!`);
+          } catch (rawErr: any) {
+            console.warn(`[Worker] RAW port 9100 failed: ${rawErr.message}. Trying Wi-Fi Windows driver...`);
+          }
+        }
+
+        // Protocol 3: Fallback to Wi-Fi Windows driver
+        if (!isSubmitted && process.platform === 'win32') {
+          const wifiWinPrinter = 'HP LaserJet Pro MFP M126nw';
+          console.log(`[Worker] Fallback: Printing via Wi-Fi Windows driver: "${wifiWinPrinter}"...`);
+          await this.updateStatus(jobId, 'PROCESSING', `Printing via Wi-Fi Windows driver: ${wifiWinPrinter}...`);
+
+          const printed = await this.printViaWindowsDriver(tempPdf, wifiWinPrinter, job.copies || 1);
+          if (printed) {
+            printerJobId = `WIN-WIFI-${Date.now().toString().slice(-4)}`;
+            isSubmitted = true;
+            methodUsed = `Wi-Fi Windows Driver (${wifiWinPrinter})`;
+            await this.waitForWindowsSpooler(wifiWinPrinter);
+          }
         }
       }
 
-      // Protocol 3: Fallback to Windows GDI driver
-      if (!isSubmitted && process.platform === 'win32') {
-        const winPrinter = process.env.WINDOWS_PRINTER_NAME || 'Hewlett-Packard HP LaserJet Pro MFP M126nw (Copy 1)';
-        console.log(`[Worker] Fallback: Printing via Windows driver: "${winPrinter}"...`);
-        await this.updateStatus(jobId, 'PROCESSING', `Printing via Windows driver: ${winPrinter}...`);
-
-        const printed = await this.printViaWindowsDriver(tempPdf, winPrinter, job.copies || 1);
-        if (printed) {
-          printerJobId = `WIN-${Date.now().toString().slice(-4)}`;
-          isSubmitted = true;
-          methodUsed = `Windows GDI (${winPrinter})`;
-          await this.waitForWindowsSpooler(winPrinter);
-        }
-      }
-
+      // =========================================================================
+      // CASE 3: NEITHER USB NOR WI-FI IS CONNECTED
+      // =========================================================================
       if (!isSubmitted) {
-        throw new Error('All print protocols (IPP Port 631, RAW Port 9100, Windows GDI) failed to deliver document to printer.');
+        throw new Error(
+          `No active printer connection found. USB printer is offline/disconnected, and Wi-Fi printer at ${targetLanIp}:${targetPort} is unreachable. Please connect via USB cable or verify Wi-Fi connectivity.`
+        );
       }
 
       await this.updateStatus(
@@ -478,5 +528,72 @@ export class JobConsumer {
       await new Promise((r) => setTimeout(r, 2000));
     }
     console.log(`[Worker] Spooler wait timeout reached, assuming print completed.`);
+  }
+
+  /**
+   * Check whether an active USB printer connection exists and is not offline
+   */
+  private async checkUsbConnection(): Promise<{ connected: boolean; printerName?: string; port?: string }> {
+    if (process.platform !== 'win32') return { connected: false };
+    try {
+      const pyCmd = `python -c "import win32print, json
+found = None
+try:
+    for p in win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS):
+        name = p[2]
+        if 'laserjet' in name.lower() or 'm126' in name.lower():
+            h = win32print.OpenPrinter(name)
+            info = win32print.GetPrinter(h, 2)
+            port = str(info.get('pPortName', ''))
+            attr = info.get('Attributes', 0)
+            win32print.ClosePrinter(h)
+            is_offline = bool(attr & win32print.PRINTER_ATTRIBUTE_WORK_OFFLINE)
+            if port.upper().startswith('USB') and not is_offline:
+                found = {'connected': True, 'name': name, 'port': port}
+                break
+except Exception:
+    pass
+print(json.dumps(found or {'connected': False}))"`;
+
+      const { stdout } = await execAsync(pyCmd, { timeout: 4000 });
+      const parsed = JSON.parse(stdout.trim());
+      if (parsed && parsed.connected) {
+        return { connected: true, printerName: parsed.name, port: parsed.port };
+      }
+    } catch {
+      try {
+        const { stdout } = await execAsync(
+          `powershell -NoProfile -Command "(Get-Printer | Where-Object { $_.PortName -like 'USB*' -and -not $_.WorkOffline } | Select-Object -First 1).Name"`
+        );
+        const name = stdout.trim();
+        if (name) {
+          return { connected: true, printerName: name, port: 'USB001' };
+        }
+      } catch {}
+    }
+    return { connected: false };
+  }
+
+  /**
+   * Check whether target IP and port (e.g. 631 IPP or 9100 RAW) are reachable
+   */
+  private async checkWifiConnection(ip: string, port = 631, timeoutMs = 1500): Promise<boolean> {
+    return new Promise((resolve) => {
+      const socket = new net.Socket();
+      socket.setTimeout(timeoutMs);
+      socket.on('connect', () => {
+        socket.destroy();
+        resolve(true);
+      });
+      socket.on('timeout', () => {
+        socket.destroy();
+        resolve(false);
+      });
+      socket.on('error', () => {
+        socket.destroy();
+        resolve(false);
+      });
+      socket.connect(port, ip);
+    });
   }
 }

@@ -49,16 +49,87 @@ class BITMAPINFO(ctypes.Structure):
     ]
 
 
+def detect_active_connection():
+    """
+    Detect whether the printer is connected via USB or Wi-Fi:
+    1. Check USB: Look for an installed LaserJet mapped to a USB port (USB001, etc.)
+       that is NOT marked offline. If USB is active, return ('usb', printer_name, port).
+    2. Check Wi-Fi: If USB is not connected, check if Wi-Fi printer exists.
+       Return ('wifi', printer_name, port/ip).
+    3. If neither: return ('none', None, None).
+    """
+    import win32print
+    import socket
+
+    try:
+        installed = win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)
+    except Exception:
+        installed = []
+
+    # 1. Check USB connection first (if USB connected -> USE USB ONLY)
+    for p in installed:
+        name = p[2]
+        if 'laserjet' in name.lower() or 'm126' in name.lower():
+            try:
+                h = win32print.OpenPrinter(name)
+                info = win32print.GetPrinter(h, 2)
+                port = str(info.get('pPortName', ''))
+                attr = info.get('Attributes', 0)
+                win32print.ClosePrinter(h)
+                is_offline = bool(attr & win32print.PRINTER_ATTRIBUTE_WORK_OFFLINE)
+                if port.upper().startswith('USB') and not is_offline:
+                    print(f"[PrintHelper] Connection Check: USB is CONNECTED -> '{name}' on {port}", flush=True)
+                    return 'usb', name, port
+            except Exception:
+                pass
+
+    # 2. Check Wi-Fi connection (target IP port 631 / 9100)
+    target_ip = os.getenv('DEFAULT_PRINTER_IP', '192.168.1.37')
+    wifi_reachable = False
+    for port in [631, 9100]:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(1.5)
+            s.connect((target_ip, port))
+            s.close()
+            wifi_reachable = True
+            break
+        except Exception:
+            pass
+
+    if wifi_reachable:
+        # Find Wi-Fi printer name in Windows (e.g. 'HP LaserJet Pro MFP M126nw')
+        wifi_printer = None
+        for p in installed:
+            name = p[2]
+            if ('laserjet' in name.lower() or 'm126' in name.lower()) and 'copy' not in name.lower():
+                wifi_printer = name
+                break
+        selected_wifi = wifi_printer or 'HP LaserJet Pro MFP M126nw'
+        print(f"[PrintHelper] Connection Check: USB not active. Wi-Fi is REACHABLE ({target_ip}:631) -> '{selected_wifi}'", flush=True)
+        return 'wifi', selected_wifi, f"{target_ip}:631"
+
+    print("[PrintHelper] Connection Check: Neither USB nor Wi-Fi printer detected!", flush=True)
+    return 'none', None, None
+
+
 def find_printer(requested_name):
     """
-    Return exact matching printer, or best match:
-    - If requested_name is found in installed printers, use it directly.
-    - If 'usb' is in requested_name or preferred, look for USB001 printer.
-    - Otherwise perform case-insensitive or fuzzy match.
+    Return exact matching printer, or automatically detect active connection:
+    - If requested_name is 'auto', None, or empty: auto-detect USB (priority) or Wi-Fi.
+    - If 'usb' is in requested_name: prioritize USB001 printer.
+    - If 'wifi' is in requested_name: prioritize Wi-Fi printer.
+    - Otherwise perform exact or best fuzzy match.
     """
     try:
         import win32print
         installed = [p[2] for p in win32print.EnumPrinters(2)]
+
+        if not requested_name or requested_name.lower() in ('auto', 'detect', ''):
+            conn_type, detected_name, _ = detect_active_connection()
+            if detected_name:
+                return detected_name
+            requested_name = 'HP LaserJet Pro MFP M126nw'
 
         # 1. Exact match first
         if requested_name in installed:
@@ -75,7 +146,13 @@ def find_printer(requested_name):
                 if 'copy' in p.lower() or 'hewlett' in p.lower():
                     return p
 
-        # 4. Fuzzy match for LaserJet
+        # 4. If Wi-Fi requested
+        if 'wifi' in requested_name.lower():
+            for p in installed:
+                if 'copy' not in p.lower() and ('laserjet' in p.lower() or 'm126' in p.lower()):
+                    return p
+
+        # 5. Fuzzy match for LaserJet
         for p in installed:
             if 'm126' in p.lower() or 'laserjet' in p.lower():
                 return p
